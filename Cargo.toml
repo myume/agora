@@ -6,3 +6,7 @@ members = [
 ]
 
 [workspace.dependencies]
+tokio = "1"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
