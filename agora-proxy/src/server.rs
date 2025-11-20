@@ -1,7 +1,9 @@
+use std::net::SocketAddr;
+
 use agora_http_parser::Request;
 use tokio::{
     io::{self},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
 use tracing::{debug, info};
 
@@ -23,33 +25,37 @@ impl Server {
             let (stream, addr) = listener.accept().await?;
 
             tokio::spawn(async move {
-                debug!("Connection Accepted: {addr}");
-
-                stream.readable().await.unwrap();
-
-                let mut buf = [0; MAX_BUF_SIZE];
-                let mut buf_size = 0;
-                let request = loop {
-                    match stream.try_read(&mut buf) {
-                        Ok(n) => {
-                            buf_size += n;
-                        }
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("{e}");
-                        }
-                    }
-
-                    match Request::parse(&buf[..buf_size]) {
-                        Ok(request) => break request,
-                        Err(ref e) => eprintln!("{:?}", e),
-                    }
-                };
-
-                debug!("{request}");
+                Self::process(stream, addr).await;
             });
         }
+    }
+
+    async fn process(stream: TcpStream, addr: SocketAddr) {
+        debug!("Connection Accepted: {addr}");
+
+        stream.readable().await.unwrap();
+
+        let mut buf = [0; MAX_BUF_SIZE];
+        let mut buf_size = 0;
+        let request = loop {
+            match stream.try_read(&mut buf) {
+                Ok(n) => {
+                    buf_size += n;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                }
+            }
+
+            match Request::parse(&buf[..buf_size]) {
+                Ok(request) => break request,
+                Err(ref e) => eprintln!("{:?}", e),
+            }
+        };
+
+        debug!("{request}");
     }
 }
