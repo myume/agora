@@ -203,3 +203,6 @@ impl TryFrom<&[u8]> for HTTPVersion {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {}

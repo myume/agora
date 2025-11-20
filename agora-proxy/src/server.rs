@@ -37,11 +37,14 @@ impl Server {
         let mut bytes_read = 0;
         let request = loop {
             if bytes_read >= buf.len() {
-                // request is too big
-                // stream
-                //     .write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n")
-                //     .await
-                //     .unwrap();
+                // request header is too big
+                if let Err(e) = stream
+                    .write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n")
+                    .await
+                {
+                    error!("Failed to send response: {e}");
+                };
+                return;
             }
 
             match stream.read(&mut buf[bytes_read..]).await {
@@ -53,14 +56,18 @@ impl Server {
                     bytes_read += n;
                     match Request::parse(&buf[..bytes_read]) {
                         Ok(request) => break request,
-                        Err(HTTPParseError::UnterminatedHeader) => continue,
+                        Err(HTTPParseError::UnterminatedHeader) => {
+                            // question: what if the header is just unterminated forever?
+                            continue;
+                        }
                         Err(e) => {
-                            // 400 invalid http request
+                            // invalid http request
                             error!("Couldn't parse request: {e}");
-                            // stream
-                            //     .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                            //     .await
-                            //     .unwrap();
+                            if let Err(e) =
+                                stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await
+                            {
+                                error!("Failed to send response: {e}");
+                            };
                             return;
                         }
                     }
@@ -73,5 +80,12 @@ impl Server {
         };
 
         debug!("{request}");
+
+        if let Err(e) = stream
+            .write_all(b"HTTP/1.1 200 OK\r\n\r\nHello World")
+            .await
+        {
+            error!("Failed to send response: {e}");
+        };
     }
 }
