@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
-    str::Utf8Error,
 };
 
 #[derive(Debug)]
@@ -29,10 +28,11 @@ pub struct Request<'a> {
 
 #[derive(Debug)]
 pub enum HTTPParseError {
-    UnterminatedMessage,
+    UnterminatedHeader,
     InvalidMethod,
     InvalidVersion,
-    NonUTF8Path(Utf8Error),
+    InvalidHeader,
+    InvalidPath,
 }
 
 type Headers<'a> = HashMap<&'a str, &'a str>;
@@ -87,11 +87,11 @@ impl<'a> Request<'a> {
 
     /// Parse the path from the buffer and return the remainging bytes
     fn parse_path(buf: &'a [u8]) -> Result<(&'a str, &'a [u8]), HTTPParseError> {
-        let path = Self::parse_until_space_or_crlf(buf);
-        Ok((
-            str::from_utf8(path).map_err(HTTPParseError::NonUTF8Path)?,
-            &buf[path.len() + 1..],
-        ))
+        let Ok(path) = str::from_utf8(Self::parse_until_space_or_crlf(buf)) else {
+            return Err(HTTPParseError::InvalidPath);
+        };
+
+        Ok((path, &buf[path.len() + 1..]))
     }
 
     /// Parse the http method from the buffer and return the remainging bytes
@@ -110,9 +110,6 @@ impl<'a> Request<'a> {
     fn parse_headers(buf: &'a [u8]) -> Result<Headers<'a>, HTTPParseError> {
         let mut headers = HashMap::new();
 
-        // how do i parse the headers?
-        // i pretty much need to each line until i get an empty line,
-
         let mut line_start = 0;
         let mut separator = 0;
         for i in 0..buf.len() - 1 {
@@ -120,15 +117,29 @@ impl<'a> Request<'a> {
                 separator = i;
             }
 
+            // From the loop, i is at most buf.len() - 2.
+            // Therefore, +2 here makes our upper bound at most buf.len(), so this bound will
+            // always be valid
             if &buf[i..i + 2] == CRLF
                 && line_start < buf.len()
                 && separator < buf.len()
                 && line_start < separator
             {
-                let key = str::from_utf8(&buf[line_start..separator]).unwrap();
-                let value = str::from_utf8(&buf[separator + 1..i]).unwrap();
+                let Ok(key) = str::from_utf8(&buf[line_start..separator]) else {
+                    return Err(HTTPParseError::InvalidHeader);
+                };
+                let Ok(value) = str::from_utf8(&buf[separator + 1..i]) else {
+                    return Err(HTTPParseError::InvalidHeader);
+                };
+
                 headers.insert(key, value.trim());
                 line_start = i + 2;
+            }
+
+            // In this case, we read to the end of the buffer,
+            // but we are still expecting more headers
+            if line_start >= buf.len() {
+                return Err(HTTPParseError::UnterminatedHeader);
             }
         }
 
