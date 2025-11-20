@@ -53,7 +53,11 @@ impl Display for HTTPVersion {
 
 impl<'a> Display for Request<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} {} {}", self.method, self.path, self.version)
+        write!(
+            f,
+            "{:?} {} {}\n {:#?}",
+            self.method, self.path, self.version, self.headers
+        )
     }
 }
 
