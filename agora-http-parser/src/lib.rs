@@ -37,6 +37,22 @@ pub enum HTTPParseError {
 
 type Headers<'a> = HashMap<&'a str, &'a str>;
 
+impl Display for HTTPParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                HTTPParseError::UnterminatedHeader => "Header is not terminated",
+                HTTPParseError::InvalidMethod => "Invalid HTTP method",
+                HTTPParseError::InvalidVersion => "Invalid HTTP version",
+                HTTPParseError::InvalidHeader => "Invalid HTTP headers",
+                HTTPParseError::InvalidPath => "Invalid HTTP Path",
+            }
+        )
+    }
+}
+
 impl Display for HTTPVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
-use agora_http_parser::Request;
+use agora_http_parser::{HTTPParseError, Request};
 use tokio::{
-    io::{self},
+    io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 pub struct Server {
     address: String,
@@ -30,29 +30,45 @@ impl Server {
         }
     }
 
-    async fn process(stream: TcpStream, addr: SocketAddr) {
+    async fn process(mut stream: TcpStream, addr: SocketAddr) {
         debug!("Connection Accepted: {addr}");
 
-        stream.readable().await.unwrap();
-
         let mut buf = [0; MAX_BUF_SIZE];
-        let mut buf_size = 0;
+        let mut bytes_read = 0;
         let request = loop {
-            match stream.try_read(&mut buf) {
-                Ok(n) => {
-                    buf_size += n;
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                }
+            if bytes_read >= buf.len() {
+                // request is too big
+                // stream
+                //     .write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n")
+                //     .await
+                //     .unwrap();
             }
 
-            match Request::parse(&buf[..buf_size]) {
-                Ok(request) => break request,
-                Err(ref e) => eprintln!("{:?}", e),
+            match stream.read(&mut buf[bytes_read..]).await {
+                Ok(0) => {
+                    // connection closed
+                    return;
+                }
+                Ok(n) => {
+                    bytes_read += n;
+                    match Request::parse(&buf[..bytes_read]) {
+                        Ok(request) => break request,
+                        Err(HTTPParseError::UnterminatedHeader) => continue,
+                        Err(e) => {
+                            // 400 invalid http request
+                            error!("Couldn't parse request: {e}");
+                            // stream
+                            //     .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                            //     .await
+                            //     .unwrap();
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to read from socket: {e}");
+                    return;
+                }
             }
         };
 
