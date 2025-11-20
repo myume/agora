@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::{Debug, Display},
     str::Utf8Error,
 };
@@ -22,7 +23,7 @@ pub enum HTTPMethod {
 pub struct Request<'a> {
     pub path: &'a str,
     pub method: HTTPMethod,
-    pub headers: Headers,
+    pub headers: Headers<'a>,
     pub version: HTTPVersion,
 }
 
@@ -34,7 +35,7 @@ pub enum HTTPParseError {
     NonUTF8Path(Utf8Error),
 }
 
-type Headers = String;
+type Headers<'a> = HashMap<&'a str, &'a str>;
 
 impl Display for HTTPVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,6 +60,7 @@ impl<'a> Display for Request<'a> {
 const CRLF: &[u8; 2] = b"\r\n";
 
 impl<'a> Request<'a> {
+    /// Parse the buffer into a [`Request`]
     pub fn parse(buf: &'a [u8]) -> Result<Self, HTTPParseError> {
         let (path, method, version, buf) = Self::parse_start_line(buf)?;
         let headers = Self::parse_headers(buf)?;
@@ -83,6 +85,7 @@ impl<'a> Request<'a> {
         Ok((path, method, version, buf))
     }
 
+    /// Parse the path from the buffer and return the remainging bytes
     fn parse_path(buf: &'a [u8]) -> Result<(&'a str, &'a [u8]), HTTPParseError> {
         let path = Self::parse_until_space_or_crlf(buf);
         Ok((
@@ -91,18 +94,45 @@ impl<'a> Request<'a> {
         ))
     }
 
+    /// Parse the http method from the buffer and return the remainging bytes
     fn parse_method(buf: &'a [u8]) -> Result<(HTTPMethod, &'a [u8]), HTTPParseError> {
         let method = Self::parse_until_space_or_crlf(buf);
         Ok((method.try_into()?, &buf[method.len() + 1..]))
     }
 
+    /// Parse the http version from the buffer and return the remainging bytes
     fn parse_version(buf: &'a [u8]) -> Result<(HTTPVersion, &'a [u8]), HTTPParseError> {
         let version = Self::parse_until_space_or_crlf(buf);
         Ok((version.try_into()?, &buf[version.len() + 1..]))
     }
 
-    fn parse_headers(buf: &[u8]) -> Result<Headers, HTTPParseError> {
-        Ok(String::new())
+    /// Parse the headers from the buffer
+    fn parse_headers(buf: &'a [u8]) -> Result<Headers<'a>, HTTPParseError> {
+        let mut headers = HashMap::new();
+
+        // how do i parse the headers?
+        // i pretty much need to each line until i get an empty line,
+
+        let mut line_start = 0;
+        let mut separator = 0;
+        for i in 0..buf.len() - 1 {
+            if buf[i] == b':' {
+                separator = i;
+            }
+
+            if &buf[i..i + 2] == CRLF
+                && line_start < buf.len()
+                && separator < buf.len()
+                && line_start < separator
+            {
+                let key = str::from_utf8(&buf[line_start..separator]).unwrap();
+                let value = str::from_utf8(&buf[separator + 1..i]).unwrap();
+                headers.insert(key, value.trim());
+                line_start = i + 2;
+            }
+        }
+
+        Ok(headers)
     }
 
     fn parse_until_space_or_crlf(buf: &[u8]) -> &[u8] {
