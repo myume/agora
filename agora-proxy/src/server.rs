@@ -47,6 +47,7 @@ impl Server {
                         Err(ref e) => eprintln!("{:?}", e),
                     }
                 };
+
                 debug!("{request}");
             });
         }
