@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use agora_http_parser::{HTTPParseError, HTTPVersion, Request, Response};
 use http::StatusCode;
@@ -23,7 +23,7 @@ pub struct ProxyEntry {
 
 #[derive(Debug, Default, Clone)]
 pub struct ServerConfig {
-    pub reverse_proxy_mapping: HashMap<Regex, ProxyEntry>,
+    pub reverse_proxy_mapping: Vec<(Regex, ProxyEntry)>,
 }
 
 impl Server {
@@ -124,8 +124,8 @@ impl Server {
                 debug!("Proxing request to {}", entry.addr);
                 proxied_request = true;
 
-                // Notice that if multiple mappings match the same path, the first one will be chosen
-                // Ah but a hashmap's order is underterministic...
+                // Notice that if multiple mappings match the same path,
+                // the first one in the array will be chosen.
                 break;
             }
         }
