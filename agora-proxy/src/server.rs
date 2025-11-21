@@ -18,7 +18,7 @@ pub struct Server {
 
 #[derive(Debug, Clone)]
 pub struct ProxyEntry {
-    addr: String,
+    pub addr: String,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -123,6 +123,27 @@ impl Server {
             if re.is_match(request.path) {
                 debug!("Proxing request to {}", entry.addr);
                 proxied_request = true;
+
+                let Ok(mut stream) = TcpStream::connect(&entry.addr).await else {
+                    error!("Failed to establish TCP connection with {}", entry.addr);
+                    let mut response = Response::new(StatusCode::BAD_GATEWAY);
+                    response.header("Connection", "close");
+                    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                        error!("Failed to send response: {e}");
+                    };
+                    return;
+                };
+
+                // For now, assume that the full request fits into our buffer.
+                // We will need to amend this assumption later, once we get the proxy working.
+                if let Err(e) = stream.write_all(&buf).await {
+                    error!("Failed to forward request to {}: {e}", entry.addr);
+                    let mut response = Response::new(StatusCode::BAD_GATEWAY);
+                    response.header("Connection", "close");
+                    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                        error!("Failed to send response: {e}");
+                    };
+                }
 
                 // Notice that if multiple mappings match the same path,
                 // the first one in the array will be chosen.
