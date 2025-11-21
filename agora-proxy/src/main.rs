@@ -1,4 +1,4 @@
-use crate::server::Server;
+use crate::server::{Server, ServerConfig};
 
 mod server;
 
@@ -6,10 +6,11 @@ mod server;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let addr = String::from("127.0.0.1:8080");
-    let server = Server::new(addr);
+    let addr = "127.0.0.1:8080";
+    let config = ServerConfig::default();
+    let server = Server::new(config);
 
-    server.listen().await?;
+    server.listen(addr).await?;
 
     Ok(())
 }

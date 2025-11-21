@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use agora_http_parser::{HTTPParseError, HTTPVersion, Request, Response};
 use http::StatusCode;
+use regex::Regex;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -9,26 +10,40 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-pub struct Server {
-    address: String,
-}
-
 const MAX_BUF_SIZE: usize = 4096 * 2;
 
+pub struct Server {
+    config: ServerConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyEntry {
+    addr: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ServerConfig {
+    pub reverse_proxy_mapping: HashMap<Regex, ProxyEntry>,
+}
+
 impl Server {
-    pub fn new(address: String) -> Self {
-        Self { address }
+    pub fn new(config: ServerConfig) -> Self {
+        Self { config }
     }
 
-    pub async fn listen(&self) -> io::Result<()> {
-        let listener = TcpListener::bind(&self.address).await?;
-        info!("Listening on {}", self.address);
+    pub async fn listen(&self, address: &str) -> io::Result<()> {
+        let listener = TcpListener::bind(address).await?;
+        info!("Listening on {}", address);
         loop {
             let (mut stream, addr) = listener.accept().await?;
 
+            let config = self.config.clone();
             tokio::spawn(async move {
-                let result =
-                    timeout(Duration::from_secs(30), Self::process(&mut stream, addr)).await;
+                let result = timeout(
+                    Duration::from_secs(30),
+                    Self::process(&mut stream, addr, config),
+                )
+                .await;
 
                 if result.is_err() {
                     error!("Connection timed out: {addr}");
@@ -44,7 +59,7 @@ impl Server {
         }
     }
 
-    async fn process(stream: &mut TcpStream, addr: SocketAddr) {
+    async fn process(stream: &mut TcpStream, addr: SocketAddr, config: ServerConfig) {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
@@ -102,8 +117,16 @@ impl Server {
             return;
         }
 
-        let mut response = Response::new(StatusCode::OK);
-        response.body(b"Hello World");
+        // could be a performance issue iterating through lots of mappings
+        for (re, entry) in config.reverse_proxy_mapping {
+            if re.is_match(request.path) {
+                debug!("Proxing request to {}", entry.addr);
+                break;
+            }
+        }
+
+        let mut response = Response::new(StatusCode::NOT_FOUND);
+        response.header("Connection", "close");
         if let Err(e) = stream.write_all(&response.into_bytes()).await {
             error!("Failed to send response: {e}");
         };
