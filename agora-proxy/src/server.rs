@@ -69,7 +69,6 @@ impl Server {
                     match Request::parse(&buf[..bytes_read]) {
                         Ok(request) => break request,
                         Err(HTTPParseError::UnterminatedHeader) => {
-                            // question: what if the header is just unterminated forever?
                             continue;
                         }
                         Err(e) => {

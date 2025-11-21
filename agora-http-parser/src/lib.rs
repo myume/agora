@@ -217,6 +217,7 @@ impl TryFrom<&[u8]> for HTTPVersion {
 
 impl HTTPStatusCode {
     pub fn reason(&self) -> &'static str {
+        // There has to be a better way to do this.
         match self {
             HTTPStatusCode::OK => "OK",
             HTTPStatusCode::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
