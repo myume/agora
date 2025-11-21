@@ -118,17 +118,25 @@ impl Server {
         }
 
         // could be a performance issue iterating through lots of mappings
+        let mut proxied_request = false;
         for (re, entry) in config.reverse_proxy_mapping {
             if re.is_match(request.path) {
                 debug!("Proxing request to {}", entry.addr);
+                proxied_request = true;
+
+                // Notice that if multiple mappings match the same path, the first one will be chosen
+                // Ah but a hashmap's order is underterministic...
                 break;
             }
         }
 
-        let mut response = Response::new(StatusCode::NOT_FOUND);
-        response.header("Connection", "close");
-        if let Err(e) = stream.write_all(&response.into_bytes()).await {
-            error!("Failed to send response: {e}");
-        };
+        if !proxied_request {
+            let mut response = Response::new(StatusCode::NOT_FOUND);
+            response.header("Connection", "close");
+            response.body(b"Not Found");
+            if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                error!("Failed to send response: {e}");
+            };
+        }
     }
 }
