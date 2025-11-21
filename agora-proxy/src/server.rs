@@ -96,6 +96,9 @@ impl Server {
         if request.version != HTTPVersion::HTTP1_1 {
             let mut response = Response::new(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
             response.header("Connection", "close");
+            if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                error!("Failed to send response: {e}");
+            };
             return;
         }
 
