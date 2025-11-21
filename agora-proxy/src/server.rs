@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
-use agora_http_parser::{HTTPParseError, HTTPStatusCode, Request, Response};
+use agora_http_parser::{HTTPParseError, HTTPVersion, Request, Response};
+use http::StatusCode;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -31,7 +32,7 @@ impl Server {
 
                 if result.is_err() {
                     error!("Connection timed out: {addr}");
-                    let mut response = Response::new(HTTPStatusCode::RequestTimeout);
+                    let mut response = Response::new(StatusCode::REQUEST_TIMEOUT);
                     response.header("Connection", "close");
                     if let Err(e) = stream.write_all(&response.into_bytes()).await {
                         error!("Failed to send response: {e}");
@@ -51,7 +52,7 @@ impl Server {
         let request = loop {
             if bytes_read >= buf.len() {
                 // request header is too big
-                let mut response = Response::new(HTTPStatusCode::RequestHeaderFieldsTooLarge);
+                let mut response = Response::new(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
                 response.header("Connection", "close");
                 if let Err(e) = stream.write_all(&response.into_bytes()).await {
                     error!("Failed to send response: {e}");
@@ -74,7 +75,7 @@ impl Server {
                         Err(e) => {
                             // invalid http request
                             error!("Couldn't parse request: {e}");
-                            let mut response = Response::new(HTTPStatusCode::BadRequest);
+                            let mut response = Response::new(StatusCode::BAD_REQUEST);
                             response.header("Connection", "close");
                             if let Err(e) = stream.write_all(&response.into_bytes()).await {
                                 error!("Failed to send response: {e}");
@@ -92,7 +93,13 @@ impl Server {
 
         debug!("{request}");
 
-        let mut response = Response::new(HTTPStatusCode::OK);
+        if request.version != HTTPVersion::HTTP1_1 {
+            let mut response = Response::new(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
+            response.header("Connection", "close");
+            return;
+        }
+
+        let mut response = Response::new(StatusCode::OK);
         response.body(b"Hello World");
         if let Err(e) = stream.write_all(&response.into_bytes()).await {
             error!("Failed to send response: {e}");

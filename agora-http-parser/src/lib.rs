@@ -3,7 +3,9 @@ use std::{
     fmt::{Debug, Display},
 };
 
-#[derive(Debug)]
+use http::StatusCode;
+
+#[derive(Debug, PartialEq)]
 pub enum HTTPVersion {
     HTTP1_1,
     HTTP2,
@@ -16,17 +18,6 @@ pub enum HTTPMethod {
     POST,
     PUT,
     DELETE,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum HTTPStatusCode {
-    // 200s
-    OK = 200,
-
-    // 400s
-    BadRequest = 400,
-    RequestTimeout = 408,
-    RequestHeaderFieldsTooLarge = 431,
 }
 
 #[derive(Debug)]
@@ -215,27 +206,15 @@ impl TryFrom<&[u8]> for HTTPVersion {
     }
 }
 
-impl HTTPStatusCode {
-    pub fn reason(&self) -> &'static str {
-        // There has to be a better way to do this.
-        match self {
-            HTTPStatusCode::OK => "OK",
-            HTTPStatusCode::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
-            HTTPStatusCode::BadRequest => "Bad Request",
-            HTTPStatusCode::RequestTimeout => "Request Timeout",
-        }
-    }
-}
-
 pub struct Response<'a> {
-    status: HTTPStatusCode,
+    status: StatusCode,
     version: HTTPVersion,
     headers: Headers<'a>,
     body: &'a [u8],
 }
 
 impl<'a> Response<'a> {
-    pub fn new(status: HTTPStatusCode) -> Self {
+    pub fn new(status: StatusCode) -> Self {
         Self {
             status,
             version: HTTPVersion::HTTP1_1, // Hardcode to HTTP/1.1
@@ -256,8 +235,8 @@ impl<'a> Response<'a> {
         let mut response = format!(
             "{} {} {}\r\n",
             self.version,
-            self.status as u16,
-            self.status.reason()
+            self.status.as_u16(),
+            self.status.canonical_reason().unwrap_or("Unknown Reason")
         );
 
         let mut has_content_length = false;
