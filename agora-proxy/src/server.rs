@@ -35,6 +35,8 @@ impl Server {
                         .write_all(b"HTTP/1.1 408 Request Timeout\r\n\r\n")
                         .await;
                 }
+
+                stream.shutdown().await
             });
         }
     }
@@ -47,7 +49,8 @@ impl Server {
         let request = loop {
             if bytes_read >= buf.len() {
                 // request header is too big
-                let response = Response::new(HTTPStatusCode::RequestHeaderFieldsTooLarge);
+                let mut response = Response::new(HTTPStatusCode::RequestHeaderFieldsTooLarge);
+                response.header("Connection", "close");
                 if let Err(e) = stream.write_all(&response.into_bytes()).await {
                     error!("Failed to send response: {e}");
                 };
@@ -70,7 +73,8 @@ impl Server {
                         Err(e) => {
                             // invalid http request
                             error!("Couldn't parse request: {e}");
-                            let response = Response::new(HTTPStatusCode::BadRequest);
+                            let mut response = Response::new(HTTPStatusCode::BadRequest);
+                            response.header("Connection", "close");
                             if let Err(e) = stream.write_all(&response.into_bytes()).await {
                                 error!("Failed to send response: {e}");
                             };
