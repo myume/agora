@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
-use agora_http_parser::{HTTPParseError, Request};
+use agora_http_parser::{HTTPParseError, HTTPStatusCode, Request, Response};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -47,10 +47,8 @@ impl Server {
         let request = loop {
             if bytes_read >= buf.len() {
                 // request header is too big
-                if let Err(e) = stream
-                    .write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n")
-                    .await
-                {
+                let response = Response::new(HTTPStatusCode::RequestHeaderFieldsTooLarge);
+                if let Err(e) = stream.write_all(&response.into_bytes()).await {
                     error!("Failed to send response: {e}");
                 };
                 return;
@@ -72,9 +70,8 @@ impl Server {
                         Err(e) => {
                             // invalid http request
                             error!("Couldn't parse request: {e}");
-                            if let Err(e) =
-                                stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await
-                            {
+                            let response = Response::new(HTTPStatusCode::BadRequest);
+                            if let Err(e) = stream.write_all(&response.into_bytes()).await {
                                 error!("Failed to send response: {e}");
                             };
                             return;
@@ -90,10 +87,9 @@ impl Server {
 
         debug!("{request}");
 
-        if let Err(e) = stream
-            .write_all(b"HTTP/1.1 200 OK\r\n\r\nHello World")
-            .await
-        {
+        let mut response = Response::new(HTTPStatusCode::OK);
+        response.body(b"Hello World");
+        if let Err(e) = stream.write_all(&response.into_bytes()).await {
             error!("Failed to send response: {e}");
         };
     }

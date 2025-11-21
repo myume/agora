@@ -18,6 +18,16 @@ pub enum HTTPMethod {
     DELETE,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum HTTPStatusCode {
+    // 200s
+    OK = 200,
+
+    // 400s
+    BadRequest = 400,
+    RequestHeaderFieldsTooLarge = 431,
+}
+
 #[derive(Debug)]
 pub struct Request<'a> {
     pub path: &'a str,
@@ -201,6 +211,65 @@ impl TryFrom<&[u8]> for HTTPVersion {
             b"HTTP/3" => Ok(HTTPVersion::HTTP3),
             _ => Err(HTTPParseError::InvalidVersion),
         }
+    }
+}
+
+impl HTTPStatusCode {
+    pub fn reason(&self) -> &'static str {
+        match self {
+            HTTPStatusCode::OK => "OK",
+            HTTPStatusCode::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
+            HTTPStatusCode::BadRequest => "Bad Request",
+        }
+    }
+}
+
+pub struct Response<'a> {
+    status: HTTPStatusCode,
+    version: HTTPVersion,
+    headers: Headers<'a>,
+    body: &'a [u8],
+}
+
+impl<'a> Response<'a> {
+    pub fn new(status: HTTPStatusCode) -> Self {
+        Self {
+            status,
+            version: HTTPVersion::HTTP1_1, // Hardcode to HTTP/1.1
+            headers: HashMap::new(),
+            body: &[],
+        }
+    }
+
+    pub fn header(&mut self, key: &'a str, value: &'a str) {
+        self.headers.insert(key, value);
+    }
+
+    pub fn body(&mut self, body: &'a [u8]) {
+        self.body = body;
+    }
+
+    pub fn into_bytes(&self) -> Vec<u8> {
+        let mut response = format!(
+            "{} {} {}\r\n",
+            self.version,
+            self.status as u16,
+            self.status.reason()
+        );
+
+        let mut has_content_length = false;
+        for (key, value) in &self.headers {
+            has_content_length = has_content_length || key.to_lowercase() == "content-length";
+            response.push_str(&format!("{}: {}\r\n", key, value));
+        }
+        if !has_content_length {
+            response.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+        }
+        response.push_str("\r\n");
+
+        let mut bytes = response.into_bytes();
+        bytes.extend_from_slice(self.body);
+        bytes
     }
 }
 
