@@ -25,6 +25,7 @@ pub enum HTTPStatusCode {
 
     // 400s
     BadRequest = 400,
+    RequestTimeout = 408,
     RequestHeaderFieldsTooLarge = 431,
 }
 
@@ -220,6 +221,7 @@ impl HTTPStatusCode {
             HTTPStatusCode::OK => "OK",
             HTTPStatusCode::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
             HTTPStatusCode::BadRequest => "Bad Request",
+            HTTPStatusCode::RequestTimeout => "Request Timeout",
         }
     }
 }

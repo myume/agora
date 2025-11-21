@@ -31,9 +31,11 @@ impl Server {
 
                 if result.is_err() {
                     error!("Connection timed out: {addr}");
-                    let _ = stream
-                        .write_all(b"HTTP/1.1 408 Request Timeout\r\n\r\n")
-                        .await;
+                    let mut response = Response::new(HTTPStatusCode::RequestTimeout);
+                    response.header("Connection", "close");
+                    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                        error!("Failed to send response: {e}");
+                    }
                 }
 
                 stream.shutdown().await
