@@ -1,9 +1,10 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use agora_http_parser::{HTTPParseError, Request};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    time::timeout,
 };
 use tracing::{debug, error, info};
 
@@ -22,15 +23,23 @@ impl Server {
         let listener = TcpListener::bind(&self.address).await?;
         info!("Listening on {}", self.address);
         loop {
-            let (stream, addr) = listener.accept().await?;
+            let (mut stream, addr) = listener.accept().await?;
 
             tokio::spawn(async move {
-                Self::process(stream, addr).await;
+                let result =
+                    timeout(Duration::from_secs(30), Self::process(&mut stream, addr)).await;
+
+                if result.is_err() {
+                    error!("Connection timed out: {addr}");
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 408 Request Timeout\r\n\r\n")
+                        .await;
+                }
             });
         }
     }
 
-    async fn process(mut stream: TcpStream, addr: SocketAddr) {
+    async fn process(stream: &mut TcpStream, addr: SocketAddr) {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
