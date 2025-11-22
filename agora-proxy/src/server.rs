@@ -59,7 +59,7 @@ impl Server {
         }
     }
 
-    async fn process(stream: &mut TcpStream, addr: SocketAddr, config: ServerConfig) {
+    async fn process(client_stream: &mut TcpStream, addr: SocketAddr, config: ServerConfig) {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
@@ -69,13 +69,13 @@ impl Server {
                 // request header is too big
                 let mut response = Response::new(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
                 response.header("Connection", "close");
-                if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                if let Err(e) = client_stream.write_all(&response.into_bytes()).await {
                     error!("Failed to send response: {e}");
                 };
                 return;
             }
 
-            match stream.read(&mut buf[bytes_read..]).await {
+            match client_stream.read(&mut buf[bytes_read..]).await {
                 Ok(0) => {
                     // connection closed
                     return;
@@ -92,7 +92,7 @@ impl Server {
                             error!("Couldn't parse request: {e}");
                             let mut response = Response::new(StatusCode::BAD_REQUEST);
                             response.header("Connection", "close");
-                            if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                            if let Err(e) = client_stream.write_all(&response.into_bytes()).await {
                                 error!("Failed to send response: {e}");
                             };
                             return;
@@ -111,7 +111,7 @@ impl Server {
         if request.version != HTTPVersion::HTTP1_1 {
             let mut response = Response::new(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
             response.header("Connection", "close");
-            if let Err(e) = stream.write_all(&response.into_bytes()).await {
+            if let Err(e) = client_stream.write_all(&response.into_bytes()).await {
                 error!("Failed to send response: {e}");
             };
             return;
@@ -124,11 +124,11 @@ impl Server {
                 debug!("Proxing request to {}", entry.addr);
                 proxied_request = true;
 
-                let Ok(mut stream) = TcpStream::connect(&entry.addr).await else {
+                let Ok(mut server_stream) = TcpStream::connect(&entry.addr).await else {
                     error!("Failed to establish TCP connection with {}", entry.addr);
                     let mut response = Response::new(StatusCode::BAD_GATEWAY);
                     response.header("Connection", "close");
-                    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                    if let Err(e) = client_stream.write_all(&response.into_bytes()).await {
                         error!("Failed to send response: {e}");
                     };
                     return;
@@ -136,11 +136,11 @@ impl Server {
 
                 // For now, assume that the full request fits into our buffer.
                 // We will need to amend this assumption later, once we get the proxy working.
-                if let Err(e) = stream.write_all(&buf[..bytes_read]).await {
+                if let Err(e) = server_stream.write_all(&buf[..bytes_read]).await {
                     error!("Failed to forward request to {}: {e}", entry.addr);
                     let mut response = Response::new(StatusCode::BAD_GATEWAY);
                     response.header("Connection", "close");
-                    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+                    if let Err(e) = server_stream.write_all(&response.into_bytes()).await {
                         error!("Failed to send response: {e}");
                     };
                 }
@@ -155,7 +155,7 @@ impl Server {
             let mut response = Response::new(StatusCode::NOT_FOUND);
             response.header("Connection", "close");
             response.body(b"Not Found");
-            if let Err(e) = stream.write_all(&response.into_bytes()).await {
+            if let Err(e) = client_stream.write_all(&response.into_bytes()).await {
                 error!("Failed to send response: {e}");
             };
         }
