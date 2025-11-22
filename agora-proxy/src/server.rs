@@ -121,7 +121,7 @@ impl Server {
         let mut proxied_request = false;
         for (re, entry) in config.reverse_proxy_mapping {
             if re.is_match(request.path) {
-                debug!("Proxing request to {}", entry.addr);
+                debug!("Proxying request to {}", entry.addr);
                 proxied_request = true;
 
                 let Ok(mut server_stream) = TcpStream::connect(&entry.addr).await else {
@@ -143,6 +143,33 @@ impl Server {
                     if let Err(e) = server_stream.write_all(&response.into_bytes()).await {
                         error!("Failed to send response: {e}");
                     };
+                }
+
+                loop {
+                    match server_stream.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Err(e) = client_stream.write_all(&buf[..n]).await {
+                                error!("Failed to forward response to {}: {e}", addr);
+                                let mut response = Response::new(StatusCode::BAD_GATEWAY);
+                                response.header("Connection", "close");
+                                if let Err(e) =
+                                    server_stream.write_all(&response.into_bytes()).await
+                                {
+                                    error!("Failed to send response: {e}");
+                                };
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to forward request to {}: {e}", addr);
+                            let mut response = Response::new(StatusCode::BAD_GATEWAY);
+                            response.header("Connection", "close");
+                            if let Err(e) = server_stream.write_all(&response.into_bytes()).await {
+                                error!("Failed to send response: {e}");
+                            };
+                            return;
+                        }
+                    }
                 }
 
                 // Notice that if multiple mappings match the same path,

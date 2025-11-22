@@ -7,7 +7,8 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_reverse_proxy_transfer() {
-    let request = b"GET / HTTP/1.1\r\n\r\nHello World";
+    let request = b"GET / HTTP/1.1\r\n\r\n";
+    let response = b"HTTP/1.1 200 OK\r\n\r\nTest Success";
 
     let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = server.local_addr().unwrap();
@@ -17,6 +18,8 @@ async fn test_reverse_proxy_transfer() {
         let bytes_read = stream.read(&mut received).await.unwrap();
         assert_eq!(bytes_read, request.len());
         assert_eq!(&received[..bytes_read], request.as_slice());
+
+        stream.write_all(response).await.unwrap();
 
         stream.shutdown().await.unwrap();
     });
@@ -40,6 +43,13 @@ async fn test_reverse_proxy_transfer() {
         socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let mut stream = socket.connect(proxy_addr.parse().unwrap()).await.unwrap();
         stream.write_all(request).await.unwrap();
+
+        let mut received = [0; 1024];
+        let bytes_read = stream.read(&mut received).await.unwrap();
+
+        assert_eq!(response.len(), bytes_read);
+        assert_eq!(response, &received[..bytes_read]);
+
         stream.shutdown().await.unwrap();
     });
 
