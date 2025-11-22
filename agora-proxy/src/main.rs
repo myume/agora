@@ -1,6 +1,4 @@
-use crate::server::{Server, ServerConfig};
-
-mod server;
+use agora_proxy::server::{Server, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

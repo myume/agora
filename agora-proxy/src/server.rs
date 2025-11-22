@@ -136,7 +136,7 @@ impl Server {
 
                 // For now, assume that the full request fits into our buffer.
                 // We will need to amend this assumption later, once we get the proxy working.
-                if let Err(e) = stream.write_all(&buf).await {
+                if let Err(e) = stream.write_all(&buf[..bytes_read]).await {
                     error!("Failed to forward request to {}: {e}", entry.addr);
                     let mut response = Response::new(StatusCode::BAD_GATEWAY);
                     response.header("Connection", "close");
