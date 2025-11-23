@@ -21,10 +21,10 @@ pub enum HTTPMethod {
 }
 
 #[derive(Debug)]
-pub struct Request<'a> {
-    pub path: &'a str,
+pub struct Request {
+    pub path: String,
     pub method: HTTPMethod,
-    pub headers: Headers<'a>,
+    pub headers: Headers,
     pub version: HTTPVersion,
 }
 
@@ -37,7 +37,7 @@ pub enum HTTPParseError {
     InvalidPath,
 }
 
-type Headers<'a> = HashMap<&'a str, &'a str>;
+type Headers = HashMap<String, String>;
 
 impl Display for HTTPParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -69,7 +69,7 @@ impl Display for HTTPVersion {
     }
 }
 
-impl<'a> Display for Request<'a> {
+impl Display for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -81,14 +81,14 @@ impl<'a> Display for Request<'a> {
 
 const CRLF: &[u8; 2] = b"\r\n";
 
-impl<'a> Request<'a> {
+impl<'a> Request {
     /// Parse the buffer into a [`Request`]
     pub fn parse(buf: &'a [u8]) -> Result<Self, HTTPParseError> {
         let (path, method, version, buf) = Self::parse_start_line(buf)?;
         let headers = Self::parse_headers(buf)?;
 
         Ok(Self {
-            path,
+            path: path.to_string(),
             method,
             headers,
             version,
@@ -129,7 +129,7 @@ impl<'a> Request<'a> {
     }
 
     /// Parse the headers from the buffer
-    fn parse_headers(buf: &'a [u8]) -> Result<Headers<'a>, HTTPParseError> {
+    fn parse_headers(buf: &'a [u8]) -> Result<Headers, HTTPParseError> {
         let mut headers = HashMap::new();
 
         let mut line_start = 0;
@@ -154,7 +154,7 @@ impl<'a> Request<'a> {
                     return Err(HTTPParseError::InvalidHeader);
                 };
 
-                headers.insert(key, value.trim());
+                headers.insert(key.to_string(), value.trim().to_string());
                 line_start = i + 2;
             }
 
@@ -176,6 +176,20 @@ impl<'a> Request<'a> {
         }
 
         buf
+    }
+
+    pub fn insert_header(&mut self, key: &'a str, value: &'a str) {
+        self.headers.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn into_bytes(&self) -> Vec<u8> {
+        let mut request = format!("{:?} {} {}\r\n", self.method, self.path, self.version);
+        for (key, value) in &self.headers {
+            request.push_str(&format!("{}: {}\r\n", key, value));
+        }
+        request.push_str("\r\n");
+
+        request.into_bytes()
     }
 }
 
@@ -209,7 +223,7 @@ impl TryFrom<&[u8]> for HTTPVersion {
 pub struct Response<'a> {
     status: StatusCode,
     version: HTTPVersion,
-    headers: Headers<'a>,
+    headers: Headers,
     body: &'a [u8],
 }
 
@@ -223,8 +237,8 @@ impl<'a> Response<'a> {
         }
     }
 
-    pub fn header(&mut self, key: &'a str, value: &'a str) {
-        self.headers.insert(key, value);
+    pub fn header(&mut self, key: &str, value: &str) {
+        self.headers.insert(key.to_string(), value.to_string());
     }
 
     pub fn body(&mut self, body: &'a [u8]) {

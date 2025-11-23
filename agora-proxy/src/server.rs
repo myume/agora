@@ -7,7 +7,7 @@ use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const MAX_BUF_SIZE: usize = 4096 * 2;
 
@@ -48,42 +48,34 @@ impl Server {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
-        let mut bytes_read = 0;
-        let request = loop {
-            if bytes_read >= buf.len() {
-                // request header is too big
-                let mut response = Response::new(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+        let request = match Self::read_request(client_stream, &mut buf).await {
+            Ok(request) => request,
+            Err(ref e) => {
+                let mut response = match e.kind() {
+                    // Failed to parse request
+                    io::ErrorKind::UnexpectedEof => {
+                        warn!("Couldn't parse request: stream closed prematurely");
+                        Response::new(StatusCode::BAD_REQUEST)
+                    }
+                    io::ErrorKind::InvalidData => {
+                        warn!("Couldn't parse request: Invalid Data");
+                        Response::new(StatusCode::BAD_REQUEST)
+                    }
+                    // Request header too big
+                    io::ErrorKind::OutOfMemory => {
+                        warn!("Couldn't parse request: Header too large");
+                        Response::new(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE)
+                    }
+                    // There was a problem reading related to the network
+                    _ => {
+                        // not much we can do to recover from this
+                        error!("Failed to read request from {addr}: {e}");
+                        return;
+                    }
+                };
                 response.header("Connection", "close");
                 Self::send_response(client_stream, response).await;
                 return;
-            }
-
-            match client_stream.read(&mut buf[bytes_read..]).await {
-                Ok(0) => {
-                    // connection closed
-                    return;
-                }
-                Ok(n) => {
-                    bytes_read += n;
-                    match Request::parse(&buf[..bytes_read]) {
-                        Ok(request) => break request,
-                        Err(HTTPParseError::UnterminatedHeader) => {
-                            continue;
-                        }
-                        Err(e) => {
-                            // invalid http request
-                            error!("Couldn't parse request: {e}");
-                            let mut response = Response::new(StatusCode::BAD_REQUEST);
-                            response.header("Connection", "close");
-                            Self::send_response(client_stream, response).await;
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to read from socket: {e}");
-                    return;
-                }
             }
         };
 
@@ -99,7 +91,7 @@ impl Server {
         // could be a performance issue iterating through lots of mappings
         let mut proxied_request = false;
         for (re, entry) in config.reverse_proxy_mapping {
-            if re.is_match(request.path) {
+            if re.is_match(&request.path) {
                 debug!("Proxying request to {}", entry.addr);
                 proxied_request = true;
 
@@ -159,5 +151,47 @@ impl Server {
         if let Err(e) = stream.write_all(&response.into_bytes()).await {
             error!("Failed to send response: {e}");
         };
+    }
+
+    async fn read_request(
+        stream: &mut TcpStream,
+        buf: &mut [u8; MAX_BUF_SIZE],
+    ) -> io::Result<Request> {
+        let mut bytes_read = 0;
+        loop {
+            if bytes_read >= buf.len() {
+                // request header is too big
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "Request Header too large",
+                ));
+            }
+
+            match stream.read(&mut buf[bytes_read..]).await {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Couldn't parse request",
+                    ));
+                }
+                Ok(n) => {
+                    bytes_read += n;
+                    match Request::parse(&buf[..bytes_read]) {
+                        Ok(request) => break Ok(request),
+                        Err(HTTPParseError::UnterminatedHeader) => {
+                            continue;
+                        }
+                        Err(e) => {
+                            // invalid http request
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("Couldn't parse request: {e}"),
+                            ));
+                        }
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
