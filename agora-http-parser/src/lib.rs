@@ -32,7 +32,6 @@ pub struct Request {
     pub method: HTTPMethod,
     pub headers: Headers,
     pub version: HTTPVersion,
-    body: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -90,22 +89,28 @@ const CRLF: &[u8; 2] = b"\r\n";
 
 impl<'a> Request {
     /// Parse the buffer into a [`Request`]
-    pub fn parse(buf: &'a [u8]) -> Result<Self, HTTPParseError> {
-        let (path, method, version, buf) = Self::parse_start_line(buf)?;
+    pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
+        let (path, method, version, buf) = Self::parse_request_line(buf)?;
         let (headers, buf) = parse_headers(buf)?;
 
-        Ok(Self {
-            path: path.to_string(),
-            method,
-            headers,
-            version,
-            body: Vec::from(buf),
-        })
+        Ok((
+            Self {
+                path: path.to_string(),
+                method,
+                headers,
+                version,
+            },
+            buf,
+        ))
+    }
+
+    pub fn is_terminated(buf: &'a [u8]) -> bool {
+        buf.windows(4).any(|window| window == b"\r\n\r\n")
     }
 
     /// Parse the buffer for the HTTP start line from the start to the first CRLF
     /// Returns the path, method, and version, and remainging bytes in this exact order
-    fn parse_start_line(
+    fn parse_request_line(
         buf: &'a [u8],
     ) -> Result<(&'a str, HTTPMethod, HTTPVersion, &'a [u8]), HTTPParseError> {
         let (method, buf) = parse_method(buf)?;
@@ -122,35 +127,37 @@ impl<'a> Request {
         }
         request.push_str("\r\n");
 
-        let mut bytes = request.into_bytes();
-        bytes.extend(&self.body);
-        bytes
+        request.into_bytes()
     }
 }
 
-pub struct Response<'a> {
+pub struct Response {
     status: StatusCode,
     version: HTTPVersion,
     headers: Headers,
-    body: &'a [u8],
 }
 
-impl<'a> Response<'a> {
+impl<'a> Response {
     pub fn new(status: StatusCode) -> Self {
         Self {
             status,
             version: HTTPVersion::HTTP1_1, // Hardcode to HTTP/1.1
             headers: HashMap::new(),
-            body: &[],
         }
+    }
+
+    pub fn parse() -> Result<Self, HTTPParseError> {
+        todo!()
+    }
+
+    pub fn parse_status_line(
+        buf: &'a [u8],
+    ) -> Result<(HTTPVersion, StatusCode, &'a [u8]), HTTPParseError> {
+        todo!()
     }
 
     pub fn header(&mut self, key: &str, value: &str) {
         self.headers.insert(key.to_string(), value.to_string());
-    }
-
-    pub fn body(&mut self, body: &'a [u8]) {
-        self.body = body;
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
@@ -161,19 +168,12 @@ impl<'a> Response<'a> {
             self.status.canonical_reason().unwrap_or("Unknown Reason")
         );
 
-        let mut has_content_length = false;
         for (key, value) in &self.headers {
-            has_content_length = has_content_length || key.to_lowercase() == "content-length";
             response.push_str(&format!("{}: {}\r\n", key, value));
-        }
-        if !has_content_length {
-            response.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
         }
         response.push_str("\r\n");
 
-        let mut bytes = response.into_bytes();
-        bytes.extend_from_slice(self.body);
-        bytes
+        response.into_bytes()
     }
 }
 
