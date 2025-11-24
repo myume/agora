@@ -91,14 +91,17 @@ impl<'a> Request {
     /// Parse the buffer into a [`Request`]
     pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
         let (path, method, version, buf) = Self::parse_start_line(buf)?;
-        let (headers, buf) = Self::parse_headers(buf)?;
+        let (headers, buf) = parse_headers(buf)?;
 
-        Ok((Self {
-            path: path.to_string(),
-            method,
-            headers,
-            version,
-        }, buf))
+        Ok((
+            Self {
+                path: path.to_string(),
+                method,
+                headers,
+                version,
+            },
+            buf,
+        ))
     }
 
     /// Parse the buffer for the HTTP start line from the start to the first CRLF
@@ -106,116 +109,11 @@ impl<'a> Request {
     fn parse_start_line(
         buf: &'a [u8],
     ) -> Result<(&'a str, HTTPMethod, HTTPVersion, &'a [u8]), HTTPParseError> {
-        let (method, buf) = Self::parse_method(buf)?;
-        let (path, buf) = Self::parse_path(buf)?;
-        let (version, buf) = Self::parse_version(buf)?;
+        let (method, buf) = parse_method(buf)?;
+        let (path, buf) = parse_path(buf)?;
+        let (version, buf) = parse_version(buf)?;
 
         Ok((path, method, version, buf))
-    }
-
-    /// Parse the path from the buffer and return the remainging bytes
-    fn parse_path(buf: &'a [u8]) -> Result<(&'a str, &'a [u8]), HTTPParseError> {
-        let Ok(path) = str::from_utf8(Self::parse_until_space(buf)) else {
-            return Err(HTTPParseError::InvalidPath);
-        };
-
-        // will need a path validator here
-        if path.is_empty() || !path.starts_with("/") {
-            return Err(HTTPParseError::InvalidPath);
-        }
-
-        Ok((path, &buf[path.len() + 1..]))
-    }
-
-    /// Parse the http method from the buffer and return the remainging bytes
-    fn parse_method(buf: &'a [u8]) -> Result<(HTTPMethod, &'a [u8]), HTTPParseError> {
-        let method = Self::parse_until_space(buf);
-        Ok((method.try_into()?, &buf[method.len() + 1..]))
-    }
-
-    /// Parse the http version from the buffer and return the remainging bytes
-    fn parse_version(buf: &'a [u8]) -> Result<(HTTPVersion, &'a [u8]), HTTPParseError> {
-        let version = Self::parse_until_crlf(buf);
-
-        // + 2 here to skip over CRLF
-        Ok((version.try_into()?, &buf[version.len() + 2..]))
-    }
-
-    /// Parse the headers from the buffer
-    fn parse_headers(mut buf: &'a [u8]) -> Result<(Headers, &'a [u8]), HTTPParseError> {
-        let mut headers = HashMap::new();
-
-        // buf is the start of the current line
-        // loop will stop when we either find a crlf at the start of the line indicating the end,
-        // or we don't have a crlf terminator at all
-        while buf.len() >= 2 && &buf[..2] != CRLF {
-            let (key, value, rest) = Self::parse_header(buf)?;
-
-            headers.insert(key.to_string(), value.to_string());
-            buf = rest;
-
-            dbg!(str::from_utf8(buf).unwrap(), key, value);
-        }
-
-        // loop terminated because we don't have a crlf terminator
-        if buf.len() < 2 {
-            return Err(HTTPParseError::UnterminatedHeader);
-        }
-
-        // otherwise the current line starts with crlf, so we've reached the end of the headers
-
-        Ok((headers, &buf[2..]))
-    }
-
-    fn parse_header(buf: &'a [u8]) -> Result<(&'a str, &'a str, &'a [u8]), HTTPParseError> {
-        let mut separator_index = None;
-        for i in 0..buf.len() - 1 {
-            if buf[i] == b':' {
-                separator_index = Some(i);
-            }
-
-            if &buf[i..i + 2] == CRLF {
-                if let Some(separator_index) = separator_index {
-                    return Ok((
-                        str::from_utf8(&buf[..separator_index])
-                            .map_err(|_| HTTPParseError::InvalidHeader)?,
-                        str::from_utf8(&buf[separator_index + 1..i])
-                            .map_err(|_| HTTPParseError::InvalidHeader)?
-                            .trim(),
-                        &buf[i + 2..],
-                    ));
-                } else {
-                    return Err(HTTPParseError::UnterminatedHeader);
-                }
-            }
-        }
-
-        Err(HTTPParseError::UnterminatedHeader)
-    }
-
-    fn parse_until_space(buf: &[u8]) -> &[u8] {
-        for i in 0..buf.len() {
-            if buf[i] == b' ' {
-                return &buf[..i];
-            }
-        }
-
-        // if we couldn't find a space, return empty string
-        b""
-    }
-
-    fn parse_until_crlf(buf: &[u8]) -> &[u8] {
-        for i in 0..buf.len() {
-            if i < buf.len() - 1 && &buf[i..i + 2] == CRLF {
-                return &buf[..i];
-            }
-        }
-
-        b""
-    }
-
-    pub fn insert_header(&mut self, key: &'a str, value: &'a str) {
-        self.headers.insert(key.to_string(), value.to_string());
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
@@ -226,38 +124,6 @@ impl<'a> Request {
         request.push_str("\r\n");
 
         request.into_bytes()
-    }
-}
-
-impl TryFrom<&[u8]> for HTTPMethod {
-    type Error = HTTPParseError;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        match value {
-            b"GET" => Ok(HTTPMethod::GET),
-            b"PUT" => Ok(HTTPMethod::PUT),
-            b"POST" => Ok(HTTPMethod::POST),
-            b"DELETE" => Ok(HTTPMethod::DELETE),
-            b"HEAD" => Ok(HTTPMethod::HEAD),
-            b"PATCH" => Ok(HTTPMethod::PATCH),
-            b"TRACE" => Ok(HTTPMethod::TRACE),
-            b"OPTIONS" => Ok(HTTPMethod::OPTIONS),
-            b"CONNECT" => Ok(HTTPMethod::CONNECT),
-            _ => Err(HTTPParseError::InvalidMethod),
-        }
-    }
-}
-
-impl TryFrom<&[u8]> for HTTPVersion {
-    type Error = HTTPParseError;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        match value {
-            b"HTTP/1.1" => Ok(HTTPVersion::HTTP1_1),
-            b"HTTP/2" => Ok(HTTPVersion::HTTP2),
-            b"HTTP/3" => Ok(HTTPVersion::HTTP3),
-            _ => Err(HTTPParseError::InvalidVersion),
-        }
     }
 }
 
@@ -310,6 +176,140 @@ impl<'a> Response<'a> {
     }
 }
 
+/// Parse the path from the buffer and return the remaining bytes
+fn parse_path(buf: &[u8]) -> Result<(&str, &[u8]), HTTPParseError> {
+    let Ok(path) = str::from_utf8(parse_until_space(buf)) else {
+        return Err(HTTPParseError::InvalidPath);
+    };
+
+    // will need a path validator here
+    if path.is_empty() || !path.starts_with("/") {
+        return Err(HTTPParseError::InvalidPath);
+    }
+
+    Ok((path, &buf[path.len() + 1..]))
+}
+
+/// Parse the http method from the buffer and return the remaining bytes
+fn parse_method(buf: &[u8]) -> Result<(HTTPMethod, &[u8]), HTTPParseError> {
+    let method = parse_until_space(buf);
+    Ok((method.try_into()?, &buf[method.len() + 1..]))
+}
+
+/// Parse the http version from the buffer and return the remainging bytes
+fn parse_version(buf: &[u8]) -> Result<(HTTPVersion, &[u8]), HTTPParseError> {
+    let version = parse_until_crlf(buf);
+
+    // + 2 here to skip over CRLF
+    Ok((version.try_into()?, &buf[version.len() + 2..]))
+}
+
+/// Parse the headers from the buffer and
+/// Return the headers and remaining bytes
+fn parse_headers(mut buf: &[u8]) -> Result<(Headers, &[u8]), HTTPParseError> {
+    let mut headers = HashMap::new();
+
+    // buf is the start of the current line
+    // loop will stop when we either find a crlf at the start of the line indicating the end,
+    // or we don't have a crlf terminator at all
+    while buf.len() >= 2 && &buf[..2] != CRLF {
+        let (key, value, rest) = parse_header(buf)?;
+
+        headers.insert(key.to_string(), value.to_string());
+        buf = rest;
+
+        dbg!(str::from_utf8(buf).unwrap(), key, value);
+    }
+
+    // loop terminated because we don't have a crlf terminator
+    if buf.len() < 2 {
+        return Err(HTTPParseError::UnterminatedHeader);
+    }
+
+    // otherwise the current line starts with crlf, so we've reached the end of the headers
+
+    Ok((headers, &buf[2..]))
+}
+
+fn parse_header(buf: &[u8]) -> Result<(&str, &str, &[u8]), HTTPParseError> {
+    let mut separator_index = None;
+    for i in 0..buf.len() - 1 {
+        if buf[i] == b':' {
+            separator_index = Some(i);
+        }
+
+        if &buf[i..i + 2] == CRLF {
+            if let Some(separator_index) = separator_index {
+                return Ok((
+                    str::from_utf8(&buf[..separator_index])
+                        .map_err(|_| HTTPParseError::InvalidHeader)?,
+                    str::from_utf8(&buf[separator_index + 1..i])
+                        .map_err(|_| HTTPParseError::InvalidHeader)?
+                        .trim(),
+                    &buf[i + 2..],
+                ));
+            } else {
+                return Err(HTTPParseError::UnterminatedHeader);
+            }
+        }
+    }
+
+    Err(HTTPParseError::UnterminatedHeader)
+}
+
+fn parse_until_space(buf: &[u8]) -> &[u8] {
+    for i in 0..buf.len() {
+        if buf[i] == b' ' {
+            return &buf[..i];
+        }
+    }
+
+    // if we couldn't find a space, return empty string
+    b""
+}
+
+fn parse_until_crlf(buf: &[u8]) -> &[u8] {
+    for i in 0..buf.len() {
+        if i < buf.len() - 1 && &buf[i..i + 2] == CRLF {
+            return &buf[..i];
+        }
+    }
+
+    b""
+}
+
+impl TryFrom<&[u8]> for HTTPMethod {
+    type Error = HTTPParseError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value {
+            b"GET" => Ok(HTTPMethod::GET),
+            b"PUT" => Ok(HTTPMethod::PUT),
+            b"POST" => Ok(HTTPMethod::POST),
+            b"DELETE" => Ok(HTTPMethod::DELETE),
+            b"HEAD" => Ok(HTTPMethod::HEAD),
+            b"PATCH" => Ok(HTTPMethod::PATCH),
+            b"TRACE" => Ok(HTTPMethod::TRACE),
+            b"OPTIONS" => Ok(HTTPMethod::OPTIONS),
+            b"CONNECT" => Ok(HTTPMethod::CONNECT),
+            _ => Err(HTTPParseError::InvalidMethod),
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for HTTPVersion {
+    type Error = HTTPParseError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value {
+            b"HTTP/1.1" => Ok(HTTPVersion::HTTP1_1),
+            b"HTTP/2" => Ok(HTTPVersion::HTTP2),
+            b"HTTP/3" => Ok(HTTPVersion::HTTP3),
+            _ => Err(HTTPParseError::InvalidVersion),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -322,7 +322,7 @@ mod tests {
     #[case(b"HTTP/1.1\r\n", b"")]
     #[case(b"HTTP/1.1 200 OK", b"HTTP/1.1")]
     fn test_parse_until_space(#[case] input: &[u8], #[case] expected: &[u8]) {
-        assert_eq!(expected, Request::parse_until_space(input));
+        assert_eq!(expected, parse_until_space(input));
     }
 
     #[rstest]
@@ -330,7 +330,7 @@ mod tests {
     #[case(b"hello world\r\n", b"hello world")]
     #[case(b"HTTP/1.1\r\n", b"HTTP/1.1")]
     fn test_parse_until_crlf(#[case] input: &[u8], #[case] expected: &[u8]) {
-        assert_eq!(expected, Request::parse_until_crlf(input));
+        assert_eq!(expected, parse_until_crlf(input));
     }
 
     #[rstest]
@@ -363,7 +363,7 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(HTTPMethod, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, Request::parse_method(input));
+        assert_eq!(expected, parse_method(input));
     }
 
     #[rstest]
@@ -377,7 +377,7 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(&str, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, Request::parse_path(input));
+        assert_eq!(expected, parse_path(input));
     }
 
     #[rstest]
@@ -396,7 +396,7 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(HTTPVersion, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, Request::parse_version(input));
+        assert_eq!(expected, parse_version(input));
     }
 
     #[rstest]
@@ -406,7 +406,7 @@ mod tests {
             ("Host".to_string(), "test".to_string()),
             ("Connection".to_string(), "keep-alive".to_string()),
             ("Accept".to_string(), "text/html".to_string()),
-        ]), 
+        ]),
         b"".as_slice()))
     )]
     #[case(
@@ -415,7 +415,7 @@ mod tests {
             ("Host".to_string(), "test".to_string()),
             ("Connection".to_string(), "keep-alive".to_string()),
             ("Accept".to_string(), "text/html".to_string()),
-        ]), 
+        ]),
         b"".as_slice()))
     )]
     #[case(b"\r\n", Ok((HashMap::from([]), b"".as_slice())))]
@@ -430,6 +430,6 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(Headers, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, Request::parse_headers(input));
+        assert_eq!(expected, parse_headers(input));
     }
 }
