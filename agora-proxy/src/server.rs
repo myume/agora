@@ -51,20 +51,20 @@ impl Server {
         let request = match Self::read_request(client_stream, &mut buf).await {
             Ok(request) => request,
             Err(ref e) => {
-                let mut response = match e.kind() {
+                let reason = match e.kind() {
                     // Failed to parse request
                     io::ErrorKind::UnexpectedEof => {
-                        warn!("Couldn't parse request: stream closed prematurely");
-                        Response::new(StatusCode::BAD_REQUEST)
+                        warn!("Couldn't parse request: Stream closed prematurely.");
+                        StatusCode::BAD_REQUEST
                     }
                     io::ErrorKind::InvalidData => {
-                        warn!("Couldn't parse request: Invalid Data");
-                        Response::new(StatusCode::BAD_REQUEST)
+                        warn!("Couldn't parse request: Invalid Data.");
+                        StatusCode::BAD_REQUEST
                     }
                     // Request header too big
                     io::ErrorKind::OutOfMemory => {
-                        warn!("Couldn't parse request: Header too large");
-                        Response::new(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE)
+                        warn!("Couldn't parse request: Header too large.");
+                        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
                     }
                     // There was a problem reading related to the network
                     _ => {
@@ -73,8 +73,7 @@ impl Server {
                         return;
                     }
                 };
-                response.header("Connection", "close");
-                Self::send_response(client_stream, response).await;
+                Self::close_connection_with_reason(client_stream, reason).await;
                 return;
             }
         };
@@ -82,9 +81,11 @@ impl Server {
         debug!("{request}");
 
         if request.version != HTTPVersion::HTTP1_1 {
-            let mut response = Response::new(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
-            response.header("Connection", "close");
-            Self::send_response(client_stream, response).await;
+            Self::close_connection_with_reason(
+                client_stream,
+                StatusCode::HTTP_VERSION_NOT_SUPPORTED,
+            )
+            .await;
             return;
         }
 
@@ -96,10 +97,12 @@ impl Server {
                 proxied_request = true;
 
                 let Ok(mut server_stream) = TcpStream::connect(&entry.addr).await else {
-                    error!("Failed to establish TCP connection with {}", entry.addr);
-                    let mut response = Response::new(StatusCode::BAD_GATEWAY);
-                    response.header("Connection", "close");
-                    Self::send_response(client_stream, response).await;
+                    error!(
+                        "Failed to establish TCP connection with server: {}",
+                        entry.addr
+                    );
+                    Self::close_connection_with_reason(client_stream, StatusCode::BAD_GATEWAY)
+                        .await;
                     return;
                 };
 
@@ -107,9 +110,9 @@ impl Server {
                 // We will need to amend this assumption later, once we get the proxy working.
                 if let Err(e) = server_stream.write_all(&request.into_bytes()).await {
                     error!("Failed to forward request to {}: {e}", entry.addr);
-                    let mut response = Response::new(StatusCode::BAD_GATEWAY);
-                    response.header("Connection", "close");
-                    Self::send_response(&mut server_stream, response).await;
+                    Self::close_connection_with_reason(client_stream, StatusCode::BAD_GATEWAY)
+                        .await;
+                    return;
                 }
 
                 loop {
@@ -117,17 +120,17 @@ impl Server {
                         Ok(0) => break,
                         Ok(n) => {
                             if let Err(e) = client_stream.write_all(&buf[..n]).await {
-                                error!("Failed to forward response to {}: {e}", addr);
-                                let mut response = Response::new(StatusCode::BAD_GATEWAY);
-                                response.header("Connection", "close");
-                                Self::send_response(&mut server_stream, response).await;
+                                error!("Failed to forward response to client {}: {e}", addr);
+                                return;
                             }
                         }
                         Err(e) => {
-                            error!("Failed to forward request to {}: {e}", addr);
-                            let mut response = Response::new(StatusCode::BAD_GATEWAY);
-                            response.header("Connection", "close");
-                            Self::send_response(&mut server_stream, response).await;
+                            error!("Failed to forward request to backend {}: {e}", addr);
+                            Self::close_connection_with_reason(
+                                client_stream,
+                                StatusCode::BAD_GATEWAY,
+                            )
+                            .await;
                             return;
                         }
                     }
@@ -140,11 +143,14 @@ impl Server {
         }
 
         if !proxied_request {
-            let mut response = Response::new(StatusCode::NOT_FOUND);
-            response.header("Connection", "close");
-            response.body(b"Not Found");
-            Self::send_response(client_stream, response).await
+            Self::close_connection_with_reason(client_stream, StatusCode::NOT_FOUND).await;
         }
+    }
+
+    async fn close_connection_with_reason(stream: &mut TcpStream, status_code: StatusCode) {
+        let mut response = Response::new(status_code);
+        response.header("Connection", "close");
+        Self::send_response(stream, response).await;
     }
 
     async fn send_response(stream: &mut TcpStream, response: Response<'static>) {
