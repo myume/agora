@@ -16,7 +16,7 @@ async fn test_reverse_proxy_transfer() {
         let (mut stream, _) = server.accept().await.unwrap();
         let mut received = [0; 1024];
         let bytes_read = stream.read(&mut received).await.unwrap();
-        assert_eq!(bytes_read, request.len());
+
         assert_eq!(&received[..bytes_read], request.as_slice());
 
         stream.write_all(response).await.unwrap();
@@ -47,7 +47,6 @@ async fn test_reverse_proxy_transfer() {
         let mut received = [0; 1024];
         let bytes_read = stream.read(&mut received).await.unwrap();
 
-        assert_eq!(response.len(), bytes_read);
         assert_eq!(response, &received[..bytes_read]);
 
         stream.shutdown().await.unwrap();
