@@ -89,16 +89,16 @@ const CRLF: &[u8; 2] = b"\r\n";
 
 impl<'a> Request {
     /// Parse the buffer into a [`Request`]
-    pub fn parse(buf: &'a [u8]) -> Result<Self, HTTPParseError> {
+    pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
         let (path, method, version, buf) = Self::parse_start_line(buf)?;
-        let headers = Self::parse_headers(buf)?;
+        let (headers, buf) = Self::parse_headers(buf)?;
 
-        Ok(Self {
+        Ok((Self {
             path: path.to_string(),
             method,
             headers,
             version,
-        })
+        }, buf))
     }
 
     /// Parse the buffer for the HTTP start line from the start to the first CRLF
@@ -142,7 +142,7 @@ impl<'a> Request {
     }
 
     /// Parse the headers from the buffer
-    fn parse_headers(mut buf: &'a [u8]) -> Result<Headers, HTTPParseError> {
+    fn parse_headers(mut buf: &'a [u8]) -> Result<(Headers, &'a [u8]), HTTPParseError> {
         let mut headers = HashMap::new();
 
         // buf is the start of the current line
@@ -164,7 +164,7 @@ impl<'a> Request {
 
         // otherwise the current line starts with crlf, so we've reached the end of the headers
 
-        Ok(headers)
+        Ok((headers, &buf[2..]))
     }
 
     fn parse_header(buf: &'a [u8]) -> Result<(&'a str, &'a str, &'a [u8]), HTTPParseError> {
@@ -402,21 +402,23 @@ mod tests {
     #[rstest]
     #[case(
         b"Host: test\r\nConnection: keep-alive\r\nAccept: text/html\r\n\r\n",
-        Ok(HashMap::from([
+        Ok((HashMap::from([
             ("Host".to_string(), "test".to_string()),
             ("Connection".to_string(), "keep-alive".to_string()),
             ("Accept".to_string(), "text/html".to_string()),
-        ]))
+        ]), 
+        b"".as_slice()))
     )]
     #[case(
         b"Host:test\r\nConnection:keep-alive\r\nAccept:text/html\r\n\r\n",
-        Ok(HashMap::from([
+        Ok((HashMap::from([
             ("Host".to_string(), "test".to_string()),
             ("Connection".to_string(), "keep-alive".to_string()),
             ("Accept".to_string(), "text/html".to_string()),
-        ]))
+        ]), 
+        b"".as_slice()))
     )]
-    #[case(b"\r\n", Ok(HashMap::from([])))]
+    #[case(b"\r\n", Ok((HashMap::from([]), b"".as_slice())))]
     #[case(
         b"Host: test\r\nConnection: keep-alive\r\nAccept: text/html\r\n",
         Err(HTTPParseError::UnterminatedHeader)
@@ -424,7 +426,10 @@ mod tests {
     #[case(b"Host: test", Err(HTTPParseError::UnterminatedHeader))]
     #[case(b"", Err(HTTPParseError::UnterminatedHeader))]
     #[case(b"Connection\r\n", Err(HTTPParseError::UnterminatedHeader))]
-    fn test_parse_headers(#[case] input: &[u8], #[case] expected: Result<Headers, HTTPParseError>) {
+    fn test_parse_headers(
+        #[case] input: &[u8],
+        #[case] expected: Result<(Headers, &[u8]), HTTPParseError>,
+    ) {
         assert_eq!(expected, Request::parse_headers(input));
     }
 }

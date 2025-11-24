@@ -183,7 +183,7 @@ impl Server {
                 Ok(n) => {
                     bytes_read += n;
                     match Request::parse(&buf[..bytes_read]) {
-                        Ok(request) => break Ok(request),
+                        Ok((request, body)) => break Ok(request),
                         Err(HTTPParseError::UnterminatedHeader) => {
                             continue;
                         }
