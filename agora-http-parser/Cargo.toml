@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 http.workspace = true
+
+
+[dev-dependencies]
+rstest.workspace = true

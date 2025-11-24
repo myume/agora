@@ -12,12 +12,18 @@ pub enum HTTPVersion {
     HTTP3,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HTTPMethod {
     GET,
     POST,
     PUT,
+    PATCH,
     DELETE,
+
+    HEAD,
+    CONNECT,
+    OPTIONS,
+    TRACE,
 }
 
 #[derive(Debug)]
@@ -28,7 +34,7 @@ pub struct Request {
     pub version: HTTPVersion,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HTTPParseError {
     UnterminatedHeader,
     InvalidMethod,
@@ -109,23 +115,30 @@ impl<'a> Request {
 
     /// Parse the path from the buffer and return the remainging bytes
     fn parse_path(buf: &'a [u8]) -> Result<(&'a str, &'a [u8]), HTTPParseError> {
-        let Ok(path) = str::from_utf8(Self::parse_until_space_or_crlf(buf)) else {
+        let Ok(path) = str::from_utf8(Self::parse_until_space(buf)) else {
             return Err(HTTPParseError::InvalidPath);
         };
+
+        // will need a path validator here
+        if path.is_empty() || !path.starts_with("/") {
+            return Err(HTTPParseError::InvalidPath);
+        }
 
         Ok((path, &buf[path.len() + 1..]))
     }
 
     /// Parse the http method from the buffer and return the remainging bytes
     fn parse_method(buf: &'a [u8]) -> Result<(HTTPMethod, &'a [u8]), HTTPParseError> {
-        let method = Self::parse_until_space_or_crlf(buf);
+        let method = Self::parse_until_space(buf);
         Ok((method.try_into()?, &buf[method.len() + 1..]))
     }
 
     /// Parse the http version from the buffer and return the remainging bytes
     fn parse_version(buf: &'a [u8]) -> Result<(HTTPVersion, &'a [u8]), HTTPParseError> {
-        let version = Self::parse_until_space_or_crlf(buf);
-        Ok((version.try_into()?, &buf[version.len() + 1..]))
+        let version = Self::parse_until_crlf(buf);
+
+        // + 2 here to skip over CRLF
+        Ok((version.try_into()?, &buf[version.len() + 2..]))
     }
 
     /// Parse the headers from the buffer
@@ -168,14 +181,25 @@ impl<'a> Request {
         Ok(headers)
     }
 
-    fn parse_until_space_or_crlf(buf: &[u8]) -> &[u8] {
+    fn parse_until_space(buf: &[u8]) -> &[u8] {
         for i in 0..buf.len() {
-            if buf[i] == b' ' || (i < buf.len() - 1 && &buf[i..i + 2] == CRLF) {
+            if buf[i] == b' ' {
                 return &buf[..i];
             }
         }
 
-        buf
+        // if we couldn't find a space, return empty string
+        b""
+    }
+
+    fn parse_until_crlf(buf: &[u8]) -> &[u8] {
+        for i in 0..buf.len() {
+            if i < buf.len() - 1 && &buf[i..i + 2] == CRLF {
+                return &buf[..i];
+            }
+        }
+
+        b""
     }
 
     pub fn insert_header(&mut self, key: &'a str, value: &'a str) {
@@ -202,6 +226,11 @@ impl TryFrom<&[u8]> for HTTPMethod {
             b"PUT" => Ok(HTTPMethod::PUT),
             b"POST" => Ok(HTTPMethod::POST),
             b"DELETE" => Ok(HTTPMethod::DELETE),
+            b"HEAD" => Ok(HTTPMethod::HEAD),
+            b"PATCH" => Ok(HTTPMethod::PATCH),
+            b"TRACE" => Ok(HTTPMethod::TRACE),
+            b"OPTIONS" => Ok(HTTPMethod::OPTIONS),
+            b"CONNECT" => Ok(HTTPMethod::CONNECT),
             _ => Err(HTTPParseError::InvalidMethod),
         }
     }
@@ -270,4 +299,73 @@ impl<'a> Response<'a> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(b"hello world", b"hello")]
+    #[case(b"helloworld", b"")]
+    #[case(b"HTTP/1.1\r\n", b"")]
+    #[case(b"HTTP/1.1 200 OK", b"HTTP/1.1")]
+    fn test_parse_until_space(#[case] input: &[u8], #[case] expected: &[u8]) {
+        assert_eq!(expected, Request::parse_until_space(input));
+    }
+
+    #[rstest]
+    #[case(b"hello world", b"")]
+    #[case(b"hello world\r\n", b"hello world")]
+    #[case(b"HTTP/1.1\r\n", b"HTTP/1.1")]
+    fn test_parse_until_crlf(#[case] input: &[u8], #[case] expected: &[u8]) {
+        assert_eq!(expected, Request::parse_until_crlf(input));
+    }
+
+    #[rstest]
+    #[case(b"GET / HTTP/1.1\r\n\r\n", Ok((HTTPMethod::GET, b"/ HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"POST /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::POST, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"PUT /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::PUT, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"PATCH /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::PATCH, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"DELETE /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::DELETE, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"INVALID / HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
+    #[case(b"GET\r\n/\r\nHTTP/1.1\r\n", Err(HTTPParseError::InvalidMethod))]
+    #[case(b"GET/ HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
+    #[case(b"/ HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
+    #[case(b" / HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
+    fn test_parse_method(
+        #[case] input: &[u8],
+        #[case] expected: Result<(HTTPMethod, &[u8]), HTTPParseError>,
+    ) {
+        assert_eq!(expected, Request::parse_method(input));
+    }
+
+    #[rstest]
+    #[case(b"/ HTTP/1.1\r\n\r\n", Ok(("/", b"HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"/api HTTP/1.1\r\n\r\n", Ok(("/api", b"HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"/stuff-with-dashes HTTP/1.1\r\n\r\n", Ok(("/stuff-with-dashes", b"HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(b"not-a-path HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidPath))]
+    #[case(b" HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidPath))]
+    #[case(b"HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidPath))]
+    fn test_parse_path(
+        #[case] input: &[u8],
+        #[case] expected: Result<(&str, &[u8]), HTTPParseError>,
+    ) {
+        assert_eq!(expected, Request::parse_path(input));
+    }
+
+    #[rstest]
+    #[case(b"HTTP/1.1\r\n\r\n", Ok((HTTPVersion::HTTP1_1, b"\r\n".as_slice())))]
+    #[case(b"HTTP/1.1\r\nConnection: close\r\n\r\n", Ok((HTTPVersion::HTTP1_1, b"Connection: close\r\n\r\n".as_slice())))]
+    #[case(b"HTTP/2\r\n\r\n", Ok((HTTPVersion::HTTP2, b"\r\n".as_slice())))]
+    #[case(b"HTTP/3\r\n\r\n", Ok((HTTPVersion::HTTP3, b"\r\n".as_slice())))]
+    #[case(b"HTTP/100\r\n\r\n", Err(HTTPParseError::InvalidVersion))]
+    #[case(b"invalid version\r\n", Err(HTTPParseError::InvalidVersion))]
+    #[case(b"non-terminated request line", Err(HTTPParseError::InvalidVersion))]
+    #[case(b"", Err(HTTPParseError::InvalidVersion))]
+    fn test_parse_version(
+        #[case] input: &[u8],
+        #[case] expected: Result<(HTTPVersion, &[u8]), HTTPParseError>,
+    ) {
+        assert_eq!(expected, Request::parse_version(input));
+    }
+}
