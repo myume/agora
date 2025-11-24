@@ -32,6 +32,7 @@ pub struct Request {
     pub method: HTTPMethod,
     pub headers: Headers,
     pub version: HTTPVersion,
+    body: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -89,19 +90,17 @@ const CRLF: &[u8; 2] = b"\r\n";
 
 impl<'a> Request {
     /// Parse the buffer into a [`Request`]
-    pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
+    pub fn parse(buf: &'a [u8]) -> Result<Self, HTTPParseError> {
         let (path, method, version, buf) = Self::parse_start_line(buf)?;
         let (headers, buf) = parse_headers(buf)?;
 
-        Ok((
-            Self {
-                path: path.to_string(),
-                method,
-                headers,
-                version,
-            },
-            buf,
-        ))
+        Ok(Self {
+            path: path.to_string(),
+            method,
+            headers,
+            version,
+            body: Vec::from(buf),
+        })
     }
 
     /// Parse the buffer for the HTTP start line from the start to the first CRLF
@@ -123,7 +122,9 @@ impl<'a> Request {
         }
         request.push_str("\r\n");
 
-        request.into_bytes()
+        let mut bytes = request.into_bytes();
+        bytes.extend(&self.body);
+        bytes
     }
 }
 
@@ -217,8 +218,6 @@ fn parse_headers(mut buf: &[u8]) -> Result<(Headers, &[u8]), HTTPParseError> {
 
         headers.insert(key.to_string(), value.to_string());
         buf = rest;
-
-        dbg!(str::from_utf8(buf).unwrap(), key, value);
     }
 
     // loop terminated because we don't have a crlf terminator

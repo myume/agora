@@ -182,21 +182,22 @@ impl Server {
                 }
                 Ok(n) => {
                     bytes_read += n;
-                    match Request::parse(&buf[..bytes_read]) {
-                        Ok((request, body)) => break Ok(request),
-                        Err(HTTPParseError::UnterminatedHeader) => {
-                            continue;
-                        }
-                        Err(e) => {
-                            // invalid http request
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("Couldn't parse request: {e}"),
-                            ));
-                        }
-                    }
                 }
                 Err(e) => return Err(e),
+            }
+
+            match Request::parse(&buf[..bytes_read]) {
+                Ok(request) => break Ok(request),
+                Err(HTTPParseError::UnterminatedHeader) => {
+                    continue;
+                }
+                Err(e) => {
+                    // invalid http request
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Couldn't parse request: {e}"),
+                    ));
+                }
             }
         }
     }
