@@ -142,43 +142,55 @@ impl<'a> Request {
     }
 
     /// Parse the headers from the buffer
-    fn parse_headers(buf: &'a [u8]) -> Result<Headers, HTTPParseError> {
+    fn parse_headers(mut buf: &'a [u8]) -> Result<Headers, HTTPParseError> {
         let mut headers = HashMap::new();
 
-        let mut line_start = 0;
-        let mut separator = 0;
+        // buf is the start of the current line
+        // loop will stop when we either find a crlf at the start of the line indicating the end,
+        // or we don't have a crlf terminator at all
+        while buf.len() >= 2 && &buf[..2] != CRLF {
+            let (key, value, rest) = Self::parse_header(buf)?;
+
+            headers.insert(key.to_string(), value.to_string());
+            buf = rest;
+
+            dbg!(str::from_utf8(buf).unwrap(), key, value);
+        }
+
+        // loop terminated because we don't have a crlf terminator
+        if buf.len() < 2 {
+            return Err(HTTPParseError::UnterminatedHeader);
+        }
+
+        // otherwise the current line starts with crlf, so we've reached the end of the headers
+
+        Ok(headers)
+    }
+
+    fn parse_header(buf: &'a [u8]) -> Result<(&'a str, &'a str, &'a [u8]), HTTPParseError> {
+        let mut separator_index = None;
         for i in 0..buf.len() - 1 {
             if buf[i] == b':' {
-                separator = i;
+                separator_index = Some(i);
             }
 
-            // From the loop, i is at most buf.len() - 2.
-            // Therefore, +2 here makes our upper bound at most buf.len(), so this bound will
-            // always be valid
-            if &buf[i..i + 2] == CRLF
-                && line_start < buf.len()
-                && separator < buf.len()
-                && line_start < separator
-            {
-                let Ok(key) = str::from_utf8(&buf[line_start..separator]) else {
-                    return Err(HTTPParseError::InvalidHeader);
-                };
-                let Ok(value) = str::from_utf8(&buf[separator + 1..i]) else {
-                    return Err(HTTPParseError::InvalidHeader);
-                };
-
-                headers.insert(key.to_string(), value.trim().to_string());
-                line_start = i + 2;
-            }
-
-            // In this case, we read to the end of the buffer,
-            // but we are still expecting more headers
-            if line_start >= buf.len() {
-                return Err(HTTPParseError::UnterminatedHeader);
+            if &buf[i..i + 2] == CRLF {
+                if let Some(separator_index) = separator_index {
+                    return Ok((
+                        str::from_utf8(&buf[..separator_index])
+                            .map_err(|_| HTTPParseError::InvalidHeader)?,
+                        str::from_utf8(&buf[separator_index + 1..i])
+                            .map_err(|_| HTTPParseError::InvalidHeader)?
+                            .trim(),
+                        &buf[i + 2..],
+                    ));
+                } else {
+                    return Err(HTTPParseError::UnterminatedHeader);
+                }
             }
         }
 
-        Ok(headers)
+        Err(HTTPParseError::UnterminatedHeader)
     }
 
     fn parse_until_space(buf: &[u8]) -> &[u8] {
@@ -322,11 +334,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case(b"GET / HTTP/1.1\r\n\r\n", Ok((HTTPMethod::GET, b"/ HTTP/1.1\r\n\r\n".as_slice())))]
-    #[case(b"POST /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::POST, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
-    #[case(b"PUT /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::PUT, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
-    #[case(b"PATCH /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::PATCH, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
-    #[case(b"DELETE /api HTTP/1.1\r\n\r\n", Ok((HTTPMethod::DELETE, b"/api HTTP/1.1\r\n\r\n".as_slice())))]
+    #[case(
+        b"GET / HTTP/1.1\r\n\r\n",
+        Ok((HTTPMethod::GET, b"/ HTTP/1.1\r\n\r\n".as_slice())))
+    ]
+    #[case(
+        b"POST /api HTTP/1.1\r\n\r\n",
+        Ok((HTTPMethod::POST, b"/api HTTP/1.1\r\n\r\n".as_slice())))
+    ]
+    #[case(
+        b"PUT /api HTTP/1.1\r\n\r\n",
+        Ok((HTTPMethod::PUT, b"/api HTTP/1.1\r\n\r\n".as_slice())))
+    ]
+    #[case(
+        b"PATCH /api HTTP/1.1\r\n\r\n",
+        Ok((HTTPMethod::PATCH, b"/api HTTP/1.1\r\n\r\n".as_slice())))
+    ]
+    #[case(
+        b"DELETE /api HTTP/1.1\r\n\r\n",
+        Ok((HTTPMethod::DELETE, b"/api HTTP/1.1\r\n\r\n".as_slice())))
+    ]
     #[case(b"INVALID / HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
     #[case(b"GET\r\n/\r\nHTTP/1.1\r\n", Err(HTTPParseError::InvalidMethod))]
     #[case(b"GET/ HTTP/1.1\r\n\r\n", Err(HTTPParseError::InvalidMethod))]
@@ -355,7 +382,10 @@ mod tests {
 
     #[rstest]
     #[case(b"HTTP/1.1\r\n\r\n", Ok((HTTPVersion::HTTP1_1, b"\r\n".as_slice())))]
-    #[case(b"HTTP/1.1\r\nConnection: close\r\n\r\n", Ok((HTTPVersion::HTTP1_1, b"Connection: close\r\n\r\n".as_slice())))]
+    #[case(
+        b"HTTP/1.1\r\nConnection: close\r\n\r\n", 
+        Ok((HTTPVersion::HTTP1_1, b"Connection: close\r\n\r\n".as_slice())))
+    ]
     #[case(b"HTTP/2\r\n\r\n", Ok((HTTPVersion::HTTP2, b"\r\n".as_slice())))]
     #[case(b"HTTP/3\r\n\r\n", Ok((HTTPVersion::HTTP3, b"\r\n".as_slice())))]
     #[case(b"HTTP/100\r\n\r\n", Err(HTTPParseError::InvalidVersion))]
@@ -367,5 +397,34 @@ mod tests {
         #[case] expected: Result<(HTTPVersion, &[u8]), HTTPParseError>,
     ) {
         assert_eq!(expected, Request::parse_version(input));
+    }
+
+    #[rstest]
+    #[case(
+        b"Host: test\r\nConnection: keep-alive\r\nAccept: text/html\r\n\r\n",
+        Ok(HashMap::from([
+            ("Host".to_string(), "test".to_string()),
+            ("Connection".to_string(), "keep-alive".to_string()),
+            ("Accept".to_string(), "text/html".to_string()),
+        ]))
+    )]
+    #[case(
+        b"Host:test\r\nConnection:keep-alive\r\nAccept:text/html\r\n\r\n",
+        Ok(HashMap::from([
+            ("Host".to_string(), "test".to_string()),
+            ("Connection".to_string(), "keep-alive".to_string()),
+            ("Accept".to_string(), "text/html".to_string()),
+        ]))
+    )]
+    #[case(b"\r\n", Ok(HashMap::from([])))]
+    #[case(
+        b"Host: test\r\nConnection: keep-alive\r\nAccept: text/html\r\n",
+        Err(HTTPParseError::UnterminatedHeader)
+    )]
+    #[case(b"Host: test", Err(HTTPParseError::UnterminatedHeader))]
+    #[case(b"", Err(HTTPParseError::UnterminatedHeader))]
+    #[case(b"Connection\r\n", Err(HTTPParseError::UnterminatedHeader))]
+    fn test_parse_headers(#[case] input: &[u8], #[case] expected: Result<Headers, HTTPParseError>) {
+        assert_eq!(expected, Request::parse_headers(input));
     }
 }
