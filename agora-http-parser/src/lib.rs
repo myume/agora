@@ -26,7 +26,7 @@ pub enum HTTPMethod {
     TRACE,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Request {
     pub path: String,
     pub method: HTTPMethod,
@@ -41,6 +41,7 @@ pub enum HTTPParseError {
     InvalidVersion,
     InvalidHeader,
     InvalidPath,
+    InvalidStatusCode,
 }
 
 type Headers = HashMap<String, String>;
@@ -55,7 +56,8 @@ impl Display for HTTPParseError {
                 HTTPParseError::InvalidMethod => "Invalid HTTP method",
                 HTTPParseError::InvalidVersion => "Invalid HTTP version",
                 HTTPParseError::InvalidHeader => "Invalid HTTP headers",
-                HTTPParseError::InvalidPath => "Invalid HTTP Path",
+                HTTPParseError::InvalidPath => "Invalid HTTP path",
+                HTTPParseError::InvalidStatusCode => "Invalid HTTP status code",
             }
         )
     }
@@ -81,6 +83,19 @@ impl Display for Request {
             f,
             "{:?} {} {}\n {:#?}",
             self.method, self.path, self.version, self.headers
+        )
+    }
+}
+
+impl Display for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {}\n {:#?}",
+            self.version,
+            self.status,
+            self.status.canonical_reason().unwrap_or("Unknown Reason"),
+            self.headers
         )
     }
 }
@@ -113,11 +128,25 @@ impl<'a> Request {
     fn parse_request_line(
         buf: &'a [u8],
     ) -> Result<(&'a str, HTTPMethod, HTTPVersion, &'a [u8]), HTTPParseError> {
-        let (method, buf) = parse_method(buf)?;
+        let (method, buf) = Self::parse_method(buf)?;
         let (path, buf) = parse_path(buf)?;
-        let (version, buf) = parse_version(buf)?;
+        let (version, buf) = Self::parse_version(buf)?;
 
         Ok((path, method, version, buf))
+    }
+
+    /// Parse the http method from the buffer and return the remaining bytes
+    fn parse_method(buf: &[u8]) -> Result<(HTTPMethod, &[u8]), HTTPParseError> {
+        let method = parse_until_space(buf);
+        Ok((method.try_into()?, &buf[method.len() + 1..]))
+    }
+
+    /// Parse the http version from the buffer and return the remainging bytes
+    fn parse_version(buf: &[u8]) -> Result<(HTTPVersion, &[u8]), HTTPParseError> {
+        let version = parse_until_crlf(buf);
+
+        // + 2 here to skip over CRLF
+        Ok((version.try_into()?, &buf[version.len() + 2..]))
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
@@ -131,6 +160,7 @@ impl<'a> Request {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Response {
     status: StatusCode,
     version: HTTPVersion,
@@ -146,14 +176,44 @@ impl<'a> Response {
         }
     }
 
-    pub fn parse() -> Result<Self, HTTPParseError> {
-        todo!()
+    pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
+        let (version, status, buf) = Self::parse_status_line(buf)?;
+        let (headers, buf) = parse_headers(buf)?;
+
+        Ok((
+            Self {
+                status,
+                version,
+                headers,
+            },
+            buf,
+        ))
     }
 
-    pub fn parse_status_line(
+    fn parse_status_line(
         buf: &'a [u8],
     ) -> Result<(HTTPVersion, StatusCode, &'a [u8]), HTTPParseError> {
-        todo!()
+        let (version, buf) = Self::parse_version(buf)?;
+        let (status, buf) = Self::parse_status(buf)?;
+
+        let reason = parse_until_crlf(buf);
+
+        Ok((version, status, &buf[reason.len() + 2..]))
+    }
+
+    /// Parse the http version from the buffer and return the remainging bytes
+    fn parse_version(buf: &[u8]) -> Result<(HTTPVersion, &[u8]), HTTPParseError> {
+        let version = parse_until_space(buf);
+
+        Ok((version.try_into()?, &buf[version.len() + 1..]))
+    }
+
+    fn parse_status(buf: &[u8]) -> Result<(StatusCode, &[u8]), HTTPParseError> {
+        let status = parse_until_space(buf);
+        Ok((
+            StatusCode::from_bytes(status).map_err(|_| HTTPParseError::InvalidStatusCode)?,
+            &buf[status.len() + 1..],
+        ))
     }
 
     pub fn header(&mut self, key: &str, value: &str) {
@@ -189,20 +249,6 @@ fn parse_path(buf: &[u8]) -> Result<(&str, &[u8]), HTTPParseError> {
     }
 
     Ok((path, &buf[path.len() + 1..]))
-}
-
-/// Parse the http method from the buffer and return the remaining bytes
-fn parse_method(buf: &[u8]) -> Result<(HTTPMethod, &[u8]), HTTPParseError> {
-    let method = parse_until_space(buf);
-    Ok((method.try_into()?, &buf[method.len() + 1..]))
-}
-
-/// Parse the http version from the buffer and return the remainging bytes
-fn parse_version(buf: &[u8]) -> Result<(HTTPVersion, &[u8]), HTTPParseError> {
-    let version = parse_until_crlf(buf);
-
-    // + 2 here to skip over CRLF
-    Ok((version.try_into()?, &buf[version.len() + 2..]))
 }
 
 /// Parse the headers from the buffer and
@@ -362,7 +408,7 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(HTTPMethod, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, parse_method(input));
+        assert_eq!(expected, Request::parse_method(input));
     }
 
     #[rstest]
@@ -395,7 +441,7 @@ mod tests {
         #[case] input: &[u8],
         #[case] expected: Result<(HTTPVersion, &[u8]), HTTPParseError>,
     ) {
-        assert_eq!(expected, parse_version(input));
+        assert_eq!(expected, Request::parse_version(input));
     }
 
     #[rstest]
@@ -430,5 +476,59 @@ mod tests {
         #[case] expected: Result<(Headers, &[u8]), HTTPParseError>,
     ) {
         assert_eq!(expected, parse_headers(input));
+    }
+
+    #[rstest]
+    #[case(
+        b"GET / HTTP/1.1\r\nHost: test\r\n\r\nHello World", 
+        Ok((
+            Request {
+                path: "/".to_string(),
+                method: HTTPMethod::GET,
+                headers: Headers::from([("Host".to_string(), "test".to_string())]),
+                version: HTTPVersion::HTTP1_1
+            },
+            b"Hello World".as_slice()))
+    )]
+    #[case(
+        b"NUKE / HTTP/1.1\r\nHost: test\r\n\r\nHello World",
+        Err(HTTPParseError::InvalidMethod)
+    )]
+    #[case(
+        b"GET / HTTP/1.1\r\nHost: test\r\nHello World",
+        Err(HTTPParseError::UnterminatedHeader)
+    )]
+    #[case(
+        b"GET / HTTP/2.1\r\nHost: test\r\n\r\nHello World",
+        Err(HTTPParseError::InvalidVersion)
+    )]
+    fn test_parse_request(
+        #[case] input: &[u8],
+        #[case] expected: Result<(Request, &[u8]), HTTPParseError>,
+    ) {
+        assert_eq!(expected, Request::parse(input));
+    }
+
+    #[rstest]
+    #[case(
+        b"HTTP/1.1 200 OK\r\nhost: test\r\n\r\nHello World", 
+        Ok((
+            Response {
+                status: StatusCode::OK,
+                version: HTTPVersion::HTTP1_1,
+                headers: HashMap::from([("host".to_string(), "test".to_string())]) },
+            b"Hello World".as_slice()))
+    )]
+    #[case(
+        b"HTTP/1.1 200 OK\r\nhost: test\r\nHello World",
+        Err(HTTPParseError::UnterminatedHeader)
+    )]
+    #[case(b"HTTP/1.11 200 OK\r\n\r\n", Err(HTTPParseError::InvalidVersion))]
+    #[case(b"HTTP/1.1 99 WHAT\r\n\r\n", Err(HTTPParseError::InvalidStatusCode))]
+    fn test_parse_response(
+        #[case] input: &[u8],
+        #[case] expected: Result<(Response, &[u8]), HTTPParseError>,
+    ) {
+        assert_eq!(expected, Response::parse(input));
     }
 }
