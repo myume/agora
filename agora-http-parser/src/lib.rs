@@ -279,7 +279,7 @@ fn parse_headers(mut buf: &[u8]) -> Result<(Headers, &[u8]), HTTPParseError> {
 fn parse_header(buf: &[u8]) -> Result<(&str, &str, &[u8]), HTTPParseError> {
     let mut separator_index = None;
     for i in 0..buf.len() - 1 {
-        if buf[i] == b':' {
+        if buf[i] == b':' && separator_index.is_none() {
             separator_index = Some(i);
         }
 
@@ -456,6 +456,16 @@ mod tests {
             ("host".to_string(), "test".to_string()),
             ("connection".to_string(), "keep-alive".to_string()),
             ("accept".to_string(), "text/html".to_string()),
+        ]),
+        b"".as_slice()))
+    )]
+    #[case(
+        b"Host: test:3000\r\nConnection: keep-alive\r\nAccept: text/html\r\nreferer:http://localhost:8080/proxy/\r\n\r\n",
+        Ok((HashMap::from([
+            ("host".to_string(), "test:3000".to_string()),
+            ("connection".to_string(), "keep-alive".to_string()),
+            ("accept".to_string(), "text/html".to_string()),
+            ("referer".to_string(), "http://localhost:8080/proxy/".to_string()),
         ]),
         b"".as_slice()))
     )]
