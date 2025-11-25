@@ -5,6 +5,8 @@ use std::{
 
 use http::StatusCode;
 
+const CRLF: &[u8; 2] = b"\r\n";
+
 #[derive(Debug, PartialEq)]
 pub enum HTTPVersion {
     HTTP1_1,
@@ -100,8 +102,6 @@ impl Display for Response {
     }
 }
 
-const CRLF: &[u8; 2] = b"\r\n";
-
 impl<'a> Request {
     /// Parse the buffer into a [`Request`]
     pub fn parse(buf: &'a [u8]) -> Result<(Self, &'a [u8]), HTTPParseError> {
@@ -117,10 +117,6 @@ impl<'a> Request {
             },
             buf,
         ))
-    }
-
-    pub fn is_terminated(buf: &'a [u8]) -> bool {
-        buf.windows(4).any(|window| window == b"\r\n\r\n")
     }
 
     /// Parse the buffer for the HTTP start line from the start to the first CRLF
@@ -321,6 +317,11 @@ fn parse_until_crlf(buf: &[u8]) -> &[u8] {
     }
 
     b""
+}
+
+// Return whether the HTTP Header is terminated
+pub fn is_terminated(buf: &[u8]) -> bool {
+    buf.windows(4).any(|window| window == b"\r\n\r\n")
 }
 
 impl TryFrom<&[u8]> for HTTPMethod {

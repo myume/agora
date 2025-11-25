@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use agora_http_parser::{HTTPVersion, Request, Response};
+use agora_http_parser::{HTTPVersion, Request, Response, is_terminated};
 use http::StatusCode;
 use regex::Regex;
 use tokio::{
@@ -173,7 +173,7 @@ impl Server {
         // in that case we want to reread the last 4 bytes instead of just the most recently
         // appended bytes.
         // TLDR; we always read at least 4 bytes to ensure that we are able to find the terminator
-        while !Request::is_terminated(
+        while !is_terminated(
             &buf[(total_bytes_read - recent_bytes_read).min(total_bytes_read.saturating_sub(4))
                 ..total_bytes_read],
         ) {
