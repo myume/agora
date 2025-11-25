@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Regex::new(".*").unwrap(),
         ProxyEntry {
             addr: "127.0.0.1:3000".to_string(),
+            strip_prefix: false,
         },
     ));
     // TODO: figure out how to allow user to set up proxy

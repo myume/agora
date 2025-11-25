@@ -18,6 +18,7 @@ pub struct Server {
 #[derive(Debug, Clone)]
 pub struct ProxyEntry {
     pub addr: String,
+    pub strip_prefix: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -47,7 +48,7 @@ impl Server {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
-        let (request, remaining_body) = match read_request(&mut client_stream, &mut buf).await {
+        let (mut request, remaining_body) = match read_request(&mut client_stream, &mut buf).await {
             Ok(request) => request,
             Err(ref e) => {
                 let reason = match e.kind() {
@@ -105,6 +106,13 @@ impl Server {
                 };
 
                 let mut proxy_conn = ProxyConnection::new(&mut client_stream, &mut server_stream);
+
+                if entry.strip_prefix {
+                    request.path = re.replace(&request.path, "").to_string();
+                    if !request.path.starts_with('/') {
+                        request.path.insert(0, '/');
+                    }
+                }
 
                 if let Err(e) = proxy_conn.proxy_request(request, remaining_body).await {
                     error!("Failed to proxy request to {}: {e}", entry.addr);
@@ -222,11 +230,18 @@ impl<'conn> ProxyConnection<'conn> {
 
     pub async fn proxy_request(
         &mut self,
-        request: Request,
+        mut request: Request,
         remaining_bytes: &[u8],
     ) -> io::Result<()> {
         // For now, assume that the full request fits into our buffer.
         // We will need to amend this assumption later, once we get the proxy working.
+
+        if let Ok(client_addr) = self.client.peer_addr() {
+            request
+                .headers
+                .insert("X-Forwarded-For".to_lowercase(), client_addr.to_string());
+        }
+
         let mut request_bytes = request.into_bytes();
         request_bytes.extend(remaining_bytes);
         self.server.write_all(&request_bytes).await
