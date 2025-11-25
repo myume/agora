@@ -1,6 +1,5 @@
 use agora_proxy::server::{ProxyEntry, Server, ServerConfig};
 use clap::{Parser, Subcommand};
-use regex::Regex;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -34,7 +33,7 @@ async fn run(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("0.0.0.0:{}", port);
     let mut config = ServerConfig::default();
     config.reverse_proxy_mapping.push((
-        Regex::new(".*").unwrap(),
+        String::from("/"),
         ProxyEntry {
             addr: "127.0.0.1:3000".to_string(),
             strip_prefix: false,

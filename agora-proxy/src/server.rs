@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 
 use agora_http_parser::{HTTPVersion, Request, Response, is_terminated};
 use http::StatusCode;
-use regex::Regex;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -23,7 +22,8 @@ pub struct ProxyEntry {
 
 #[derive(Debug, Default, Clone)]
 pub struct ServerConfig {
-    pub reverse_proxy_mapping: Vec<(Regex, ProxyEntry)>,
+    /// Mapping of Path prefix to proxy entry
+    pub reverse_proxy_mapping: Vec<(String, ProxyEntry)>,
 }
 
 impl Server {
@@ -91,8 +91,8 @@ impl Server {
 
         // could be a performance issue iterating through lots of mappings
         let mut proxied_request = false;
-        for (re, entry) in config.reverse_proxy_mapping {
-            if re.is_match(&request.path) {
+        for (prefix, entry) in config.reverse_proxy_mapping {
+            if request.path.starts_with(&prefix) {
                 debug!("Proxying request to {}", entry.addr);
                 proxied_request = true;
 
@@ -108,7 +108,7 @@ impl Server {
                 let mut proxy_conn = ProxyConnection::new(&mut client_stream, &mut server_stream);
 
                 if entry.strip_prefix {
-                    request.path = re.replace(&request.path, "").to_string();
+                    request.path = request.path.replace(&prefix, "").to_string();
                     if !request.path.starts_with('/') {
                         request.path.insert(0, '/');
                     }

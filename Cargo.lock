@@ -17,7 +17,6 @@ dependencies = [
  "agora-http-parser",
  "clap",
  "http",
- "regex",
  "tokio",
  "tracing",
  "tracing-subscriber",

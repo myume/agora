@@ -1,6 +1,5 @@
 use agora_http_parser::{Request, Response};
 use agora_proxy::server::{ProxyEntry, Server, ServerConfig};
-use regex::Regex;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpSocket},
@@ -43,7 +42,7 @@ async fn test_reverse_proxy_transfer() {
     let proxy = tokio::spawn(async move {
         let mut config = ServerConfig::default();
         config.reverse_proxy_mapping.push((
-            Regex::new(".*").unwrap(),
+            String::from("/"),
             ProxyEntry {
                 addr: server_addr.to_string(),
                 strip_prefix: false,
