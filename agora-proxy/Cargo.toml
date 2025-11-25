@@ -10,3 +10,4 @@ tracing-subscriber.workspace = true
 agora-http-parser = {path = "../agora-http-parser"}
 http.workspace = true
 regex.workspace = true
+clap.workspace = true
