@@ -213,7 +213,11 @@ impl<'a> Response {
     }
 
     pub fn header(&mut self, key: &str, value: &str) {
-        self.headers.insert(key.to_string(), value.to_string());
+        self.headers.insert(key.to_lowercase(), value.to_string());
+    }
+
+    pub fn get_header(&self, key: &str) -> Option<&String> {
+        self.headers.get(key)
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
@@ -258,7 +262,7 @@ fn parse_headers(mut buf: &[u8]) -> Result<(Headers, &[u8]), HTTPParseError> {
     while buf.len() >= 2 && &buf[..2] != CRLF {
         let (key, value, rest) = parse_header(buf)?;
 
-        headers.insert(key.to_string(), value.to_string());
+        headers.insert(key.to_lowercase(), value.to_string());
         buf = rest;
     }
 
@@ -449,18 +453,18 @@ mod tests {
     #[case(
         b"Host: test\r\nConnection: keep-alive\r\nAccept: text/html\r\n\r\n",
         Ok((HashMap::from([
-            ("Host".to_string(), "test".to_string()),
-            ("Connection".to_string(), "keep-alive".to_string()),
-            ("Accept".to_string(), "text/html".to_string()),
+            ("host".to_string(), "test".to_string()),
+            ("connection".to_string(), "keep-alive".to_string()),
+            ("accept".to_string(), "text/html".to_string()),
         ]),
         b"".as_slice()))
     )]
     #[case(
         b"Host:test\r\nConnection:keep-alive\r\nAccept:text/html\r\n\r\n",
         Ok((HashMap::from([
-            ("Host".to_string(), "test".to_string()),
-            ("Connection".to_string(), "keep-alive".to_string()),
-            ("Accept".to_string(), "text/html".to_string()),
+            ("host".to_string(), "test".to_string()),
+            ("connection".to_string(), "keep-alive".to_string()),
+            ("accept".to_string(), "text/html".to_string()),
         ]),
         b"".as_slice()))
     )]
@@ -486,7 +490,7 @@ mod tests {
             Request {
                 path: "/".to_string(),
                 method: HTTPMethod::GET,
-                headers: Headers::from([("Host".to_string(), "test".to_string())]),
+                headers: Headers::from([("host".to_string(), "test".to_string())]),
                 version: HTTPVersion::HTTP1_1
             },
             b"Hello World".as_slice()))

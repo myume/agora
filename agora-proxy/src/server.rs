@@ -34,21 +34,20 @@ impl Server {
         let listener = TcpListener::bind(address).await?;
         info!("Listening on {}", address);
         loop {
-            let (mut stream, addr) = listener.accept().await?;
+            let (stream, addr) = listener.accept().await?;
 
             let config = self.config.clone();
             tokio::spawn(async move {
-                Self::process(&mut stream, addr, config).await;
-                stream.shutdown().await
+                Self::process(stream, addr, config).await;
             });
         }
     }
 
-    async fn process(client_stream: &mut TcpStream, addr: SocketAddr, config: ServerConfig) {
+    async fn process(mut client_stream: TcpStream, addr: SocketAddr, config: ServerConfig) {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
-        let (request, remaining_body) = match Self::read_request(client_stream, &mut buf).await {
+        let (request, remaining_body) = match read_request(&mut client_stream, &mut buf).await {
             Ok(request) => request,
             Err(ref e) => {
                 let reason = match e.kind() {
@@ -73,7 +72,7 @@ impl Server {
                         return;
                     }
                 };
-                Self::close_connection_with_reason(client_stream, reason).await;
+                close_connection_with_reason(&mut client_stream, reason).await;
                 return;
             }
         };
@@ -81,8 +80,8 @@ impl Server {
         debug!("{request}");
 
         if request.version != HTTPVersion::HTTP1_1 {
-            Self::close_connection_with_reason(
-                client_stream,
+            close_connection_with_reason(
+                &mut client_stream,
                 StatusCode::HTTP_VERSION_NOT_SUPPORTED,
             )
             .await;
@@ -101,42 +100,23 @@ impl Server {
                         "Failed to establish TCP connection with server: {}",
                         entry.addr
                     );
-                    Self::close_connection_with_reason(client_stream, StatusCode::BAD_GATEWAY)
-                        .await;
+                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
                     return;
                 };
 
-                // For now, assume that the full request fits into our buffer.
-                // We will need to amend this assumption later, once we get the proxy working.
-                let mut request_bytes = request.into_bytes();
-                request_bytes.extend(remaining_body);
-                if let Err(e) = server_stream.write_all(&request_bytes).await {
-                    error!("Failed to forward request to {}: {e}", entry.addr);
-                    Self::close_connection_with_reason(client_stream, StatusCode::BAD_GATEWAY)
-                        .await;
-                    return;
-                }
+                let mut proxy_conn = ProxyConnection::new(&mut client_stream, &mut server_stream);
 
-                loop {
-                    match server_stream.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Err(e) = client_stream.write_all(&buf[..n]).await {
-                                error!("Failed to forward response to client {}: {e}", addr);
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to forward request to backend {}: {e}", addr);
-                            Self::close_connection_with_reason(
-                                client_stream,
-                                StatusCode::BAD_GATEWAY,
-                            )
-                            .await;
-                            return;
-                        }
-                    }
-                }
+                if let Err(e) = proxy_conn.proxy_request(request, remaining_body).await {
+                    error!("Failed to proxy request to {}: {e}", entry.addr);
+                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
+                    return;
+                };
+
+                if let Err(e) = proxy_conn.proxy_response(&mut buf).await {
+                    error!("Failed to proxy response to {addr}: {e}");
+                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
+                    return;
+                };
 
                 // Notice that if multiple mappings match the same path,
                 // the first one in the array will be chosen.
@@ -145,66 +125,138 @@ impl Server {
         }
 
         if !proxied_request {
-            Self::close_connection_with_reason(client_stream, StatusCode::NOT_FOUND).await;
+            close_connection_with_reason(&mut client_stream, StatusCode::NOT_FOUND).await;
         }
     }
+}
 
-    async fn close_connection_with_reason(stream: &mut TcpStream, status_code: StatusCode) {
-        let mut response = Response::new(status_code);
-        response.header("Connection", "close");
-        Self::send_response(stream, response).await;
-    }
+async fn close_connection_with_reason(stream: &mut TcpStream, status_code: StatusCode) {
+    let mut response = Response::new(status_code);
+    response.header("Connection", "close");
+    send_response(stream, response).await;
+}
 
-    async fn send_response(stream: &mut TcpStream, response: Response) {
-        if let Err(e) = stream.write_all(&response.into_bytes()).await {
-            error!("Failed to send response: {e}");
-        };
-    }
+async fn send_response(stream: &mut TcpStream, response: Response) {
+    if let Err(e) = stream.write_all(&response.into_bytes()).await {
+        error!("Failed to send response: {e}");
+    };
+}
 
-    async fn read_request<'buf>(
-        stream: &mut TcpStream,
-        buf: &'buf mut [u8; MAX_BUF_SIZE],
-    ) -> io::Result<(Request, &'buf [u8])> {
-        let mut total_bytes_read: usize = 0;
-        let mut recent_bytes_read = 0;
+async fn read_message_into_buffer(
+    stream: &mut TcpStream,
+    buf: &mut [u8; MAX_BUF_SIZE],
+) -> io::Result<usize> {
+    let mut total_bytes_read: usize = 0;
+    let mut recent_bytes_read = 0;
 
-        // We only scan the most recent bytes.
-        // There could be a case where the terminator is split into 2 reads,
-        // in that case we want to reread the last 4 bytes instead of just the most recently
-        // appended bytes.
-        // TLDR; we always read at least 4 bytes to ensure that we are able to find the terminator
-        while !is_terminated(
-            &buf[(total_bytes_read - recent_bytes_read).min(total_bytes_read.saturating_sub(4))
-                ..total_bytes_read],
-        ) {
-            if total_bytes_read >= buf.len() {
-                // request header is too big
+    // We only scan the most recent bytes.
+    // There could be a case where the terminator is split into 2 reads,
+    // in that case we want to reread the last 4 bytes instead of just the most recently
+    // appended bytes.
+    // TLDR; we always read at least 4 bytes to ensure that we are able to find the terminator
+    while !is_terminated(
+        &buf[(total_bytes_read - recent_bytes_read).min(total_bytes_read.saturating_sub(4))
+            ..total_bytes_read],
+    ) {
+        if total_bytes_read >= buf.len() {
+            // request header is too big
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "Request Header too large",
+            ));
+        }
+
+        match stream.read(&mut buf[total_bytes_read..]).await {
+            Ok(0) => {
                 return Err(io::Error::new(
-                    io::ErrorKind::OutOfMemory,
-                    "Request Header too large",
+                    io::ErrorKind::UnexpectedEof,
+                    "Couldn't parse message",
                 ));
             }
-
-            match stream.read(&mut buf[total_bytes_read..]).await {
-                Ok(0) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "Couldn't parse request",
-                    ));
-                }
-                Ok(n) => {
-                    total_bytes_read += n;
-                    recent_bytes_read = n;
-                }
-                Err(e) => return Err(e),
+            Ok(n) => {
+                total_bytes_read += n;
+                recent_bytes_read = n;
             }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(total_bytes_read)
+}
+
+async fn read_response<'buf>(
+    stream: &mut TcpStream,
+    buf: &'buf mut [u8; MAX_BUF_SIZE],
+) -> io::Result<(Response, &'buf [u8])> {
+    let total_bytes_read = read_message_into_buffer(stream, buf).await?;
+    Response::parse(&buf[..total_bytes_read]).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Couldn't parse response: {e}"),
+        )
+    })
+}
+
+async fn read_request<'buf>(
+    stream: &mut TcpStream,
+    buf: &'buf mut [u8; MAX_BUF_SIZE],
+) -> io::Result<(Request, &'buf [u8])> {
+    let total_bytes_read = read_message_into_buffer(stream, buf).await?;
+    Request::parse(&buf[..total_bytes_read]).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Couldn't parse request: {e}"),
+        )
+    })
+}
+
+pub struct ProxyConnection<'conn> {
+    client: &'conn mut TcpStream,
+    server: &'conn mut TcpStream,
+}
+
+impl<'conn> ProxyConnection<'conn> {
+    pub fn new(client: &'conn mut TcpStream, server: &'conn mut TcpStream) -> Self {
+        Self { client, server }
+    }
+
+    pub async fn proxy_request(
+        &mut self,
+        request: Request,
+        remaining_bytes: &[u8],
+    ) -> io::Result<()> {
+        // For now, assume that the full request fits into our buffer.
+        // We will need to amend this assumption later, once we get the proxy working.
+        let mut request_bytes = request.into_bytes();
+        request_bytes.extend(remaining_bytes);
+        self.server.write_all(&request_bytes).await
+    }
+
+    pub async fn proxy_response(&mut self, buf: &mut [u8; MAX_BUF_SIZE]) -> io::Result<()> {
+        let (response, remaining) = read_response(self.server, buf).await?;
+
+        if let Some(Ok(content_length)) = response
+            .get_header("content-length")
+            .map(|header| header.parse::<usize>())
+        {
+            let mut bytes = response.into_bytes();
+            bytes.extend_from_slice(remaining);
+            self.client.write_all(&bytes).await?;
+
+            let mut content_bytes_written = remaining.len();
+            while content_bytes_written < content_length {
+                let bytes_read = self.server.read(buf).await?;
+                if bytes_read == 0 {
+                    break;
+                }
+
+                self.client.write_all(&buf[..bytes_read]).await?;
+                content_bytes_written += bytes_read;
+            }
+        } else {
+            self.client.write_all(&response.into_bytes()).await?;
         }
 
-        Request::parse(&buf[..total_bytes_read]).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Couldn't parse request: {e}"),
-            )
-        })
+        Ok(())
     }
 }
