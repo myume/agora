@@ -233,28 +233,22 @@ impl<'conn> ProxyConnection<'conn> {
     }
 
     pub async fn proxy_response(&mut self, buf: &mut [u8; MAX_BUF_SIZE]) -> io::Result<()> {
-        let (response, remaining) = read_response(self.server, buf).await?;
+        let (mut response, remaining) = read_response(self.server, buf).await?;
+        debug!("{response}");
 
-        if let Some(Ok(content_length)) = response
-            .get_header("content-length")
-            .map(|header| header.parse::<usize>())
+        // set connection close for now and just blindly keep reading
+        // until the server closes the connection for us.
+        // will need to handle content length and transfer encoding chunked in the future.
+        response.header("Connection", "close");
+
+        let mut bytes = response.into_bytes();
+        bytes.extend_from_slice(remaining);
+        self.client.write_all(&bytes).await?;
+
+        while let Ok(bytes_read) = self.server.read(buf).await
+            && bytes_read != 0
         {
-            let mut bytes = response.into_bytes();
-            bytes.extend_from_slice(remaining);
-            self.client.write_all(&bytes).await?;
-
-            let mut content_bytes_written = remaining.len();
-            while content_bytes_written < content_length {
-                let bytes_read = self.server.read(buf).await?;
-                if bytes_read == 0 {
-                    break;
-                }
-
-                self.client.write_all(&buf[..bytes_read]).await?;
-                content_bytes_written += bytes_read;
-            }
-        } else {
-            self.client.write_all(&response.into_bytes()).await?;
+            self.client.write_all(&buf[..bytes_read]).await?;
         }
 
         Ok(())

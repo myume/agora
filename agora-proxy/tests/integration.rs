@@ -8,7 +8,8 @@ use tokio::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_reverse_proxy_transfer() {
     let request = b"GET / HTTP/1.1\r\n\r\nHello World";
-    let response = b"HTTP/1.1 200 OK\r\ncontent-length: 12\r\n\r\nTest Success";
+    let response =
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 12\r\n\r\nTest Success";
 
     let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = server.local_addr().unwrap();

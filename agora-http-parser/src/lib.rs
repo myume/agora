@@ -95,7 +95,7 @@ impl Display for Response {
             f,
             "{} {} {}\n {:#?}",
             self.version,
-            self.status,
+            self.status.as_u16(),
             self.status.canonical_reason().unwrap_or("Unknown Reason"),
             self.headers
         )
