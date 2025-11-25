@@ -1,3 +1,4 @@
+use agora_http_parser::{Request, Response};
 use agora_proxy::server::{ProxyEntry, Server, ServerConfig};
 use regex::Regex;
 use tokio::{
@@ -20,14 +21,16 @@ async fn test_reverse_proxy_transfer() {
         let (mut stream, _) = server.accept().await.unwrap();
         let mut received = [0; 1024];
         let bytes_read = stream.read(&mut received).await.unwrap();
-
-        let expected_request = format!(
+        let expected = &format!(
             "GET / HTTP/1.1\r\nx-forwarded-for: {}\r\n\r\nHello World",
             client_addr
-        );
+        )
+        .into_bytes();
+        let expected_request = Request::parse(expected);
+
+        let actual_request = Request::parse(&received[..bytes_read]);
         assert_eq!(
-            &received[..bytes_read],
-            expected_request.into_bytes(),
+            actual_request, expected_request,
             "request does not match expected"
         );
 
@@ -64,8 +67,8 @@ async fn test_reverse_proxy_transfer() {
         let bytes_read = stream.read(&mut received).await.unwrap();
 
         assert_eq!(
-            response,
-            &received[..bytes_read],
+            Response::parse(response),
+            Response::parse(&received[..bytes_read]),
             "response does not match expected"
         );
 
