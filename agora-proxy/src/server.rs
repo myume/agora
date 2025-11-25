@@ -1,7 +1,8 @@
-use std::net::SocketAddr;
+use std::{collections::HashMap, fs::File, io::BufReader, net::SocketAddr, path::Path};
 
 use agora_http_parser::{HTTPVersion, Request, Response, is_terminated};
 use http::StatusCode;
+use serde::{Deserialize, Serialize};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -14,16 +15,29 @@ pub struct Server {
     config: ServerConfig,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyEntry {
     pub addr: String,
     pub strip_prefix: bool,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// Mapping of Path prefix to proxy entry
-    pub reverse_proxy_mapping: Vec<(String, ProxyEntry)>,
+    pub reverse_proxy_mapping: HashMap<String, ProxyEntry>,
+}
+
+impl ServerConfig {
+    pub fn parse(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_file = File::open(path)?;
+        let reader = BufReader::new(config_file);
+        let reverse_proxy_mapping: HashMap<String, ProxyEntry> =
+            serde_json::from_reader(reader).map_err(|e| format!("Failed to parse config: {e}"))?;
+
+        Ok(Self {
+            reverse_proxy_mapping,
+        })
+    }
 }
 
 impl Server {

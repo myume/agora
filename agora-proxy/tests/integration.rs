@@ -41,13 +41,13 @@ async fn test_reverse_proxy_transfer() {
     let proxy_addr = "127.0.0.1:8080";
     let proxy = tokio::spawn(async move {
         let mut config = ServerConfig::default();
-        config.reverse_proxy_mapping.push((
+        config.reverse_proxy_mapping.insert(
             String::from("/"),
             ProxyEntry {
                 addr: server_addr.to_string(),
                 strip_prefix: false,
             },
-        ));
+        );
         let server = Server::new(config);
 
         server.listen(proxy_addr).await.unwrap();

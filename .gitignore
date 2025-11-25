@@ -28,3 +28,6 @@ target
 # Nix
 .direnv
 .envrc
+
+# Testing
+test-config.json
