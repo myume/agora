@@ -128,9 +128,19 @@ impl Server {
                     }
                 }
 
-                if let Err(e) = proxy_conn.proxy_request(request, remaining_body).await {
-                    error!("Failed to proxy request to {}: {e}", entry.addr);
-                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
+                if let Err(ref e) = proxy_conn.proxy_request(request, remaining_body).await {
+                    let reason = match e.kind() {
+                        io::ErrorKind::InvalidData => {
+                            warn!("Invalid Request: {e}");
+                            StatusCode::BAD_REQUEST
+                        }
+                        _ => {
+                            error!("Failed to proxy request to {}: {e}", entry.addr);
+                            StatusCode::BAD_GATEWAY
+                        }
+                    };
+
+                    close_connection_with_reason(&mut client_stream, reason).await;
                     return;
                 };
 
