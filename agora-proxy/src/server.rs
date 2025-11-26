@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs::File, io::BufReader, net::SocketAddr, path::Path};
+use std::{
+    collections::HashMap, fs::File, io::BufReader, net::SocketAddr, path::Path, time::Duration,
+};
 
 use agora_http_parser::{HTTPVersion, Headers, Request, Response, is_terminated};
 use http::StatusCode;
@@ -6,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    time::timeout,
 };
 use tracing::{debug, error, info, warn};
 
@@ -62,7 +65,18 @@ impl Server {
         debug!("Connection Accepted: {addr}");
 
         let mut buf = [0; MAX_BUF_SIZE];
-        let (mut request, remaining_body) = match read_request(&mut client_stream, &mut buf).await {
+
+        let Ok(read_result) = timeout(
+            Duration::from_secs(30),
+            read_request(&mut client_stream, &mut buf),
+        )
+        .await
+        else {
+            close_connection_with_reason(&mut client_stream, StatusCode::REQUEST_TIMEOUT).await;
+            return;
+        };
+
+        let (mut request, remaining_body) = match read_result {
             Ok(request) => request,
             Err(ref e) => {
                 let reason = match e.kind() {
@@ -128,7 +142,18 @@ impl Server {
                     }
                 }
 
-                if let Err(ref e) = proxy_conn.proxy_request(request, remaining_body).await {
+                let Ok(proxy_result) = timeout(
+                    Duration::from_secs(30),
+                    proxy_conn.proxy_request(request, remaining_body),
+                )
+                .await
+                else {
+                    close_connection_with_reason(&mut client_stream, StatusCode::REQUEST_TIMEOUT)
+                        .await;
+                    return;
+                };
+
+                if let Err(ref e) = proxy_result {
                     let reason = match e.kind() {
                         io::ErrorKind::InvalidData => {
                             warn!("Invalid Request: {e}");
@@ -144,7 +169,14 @@ impl Server {
                     return;
                 };
 
-                if let Err(e) = proxy_conn.proxy_response(&mut buf).await {
+                let Ok(proxy_result) =
+                    timeout(Duration::from_secs(30), proxy_conn.proxy_response(&mut buf)).await
+                else {
+                    close_connection_with_reason(&mut client_stream, StatusCode::GATEWAY_TIMEOUT)
+                        .await;
+                    return;
+                };
+                if let Err(e) = proxy_result {
                     error!("Failed to proxy response to {addr}: {e}");
                     close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
                     return;
