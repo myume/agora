@@ -277,7 +277,7 @@ impl<'conn> ProxyConnection<'conn> {
             ));
         }
 
-        let mut buf = [0; 1024];
+        let mut buf = [0; 4096];
         if let Some(transfer_encoding) = transfer_encoding
             && let is_chunked = transfer_encoding
                 .to_lowercase()
@@ -289,8 +289,8 @@ impl<'conn> ProxyConnection<'conn> {
             let mut bytes_read = 0;
 
             // we will keep the last 3 bytes of the *last* buffer in the beginning 3 bytes of the
-            // *current* buffer. The reason for this is that we could split the message terminator
-            // over two messages. For example imagine [H, E, L, L, O, \r, \n, \r] [\n].
+            // *current* buffer. The reason for this is to handle the case where the message terminator
+            // was split over two messages. For example imagine [H, E, L, L, O, \r, \n, \r] [\n].
             //
             // Since our terminator is 4 bytes, we only need to keep the last 3 bytes to determine
             // if the terminator carried over from the last buffer. Since we keep the last 3 bytes
