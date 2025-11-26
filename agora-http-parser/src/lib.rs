@@ -46,7 +46,7 @@ pub enum HTTPParseError {
     InvalidStatusCode,
 }
 
-type Headers = HashMap<String, String>;
+pub type Headers = HashMap<String, String>;
 
 impl Display for HTTPParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -184,6 +184,10 @@ impl<'a> Response {
             },
             buf,
         ))
+    }
+
+    pub fn get_headers(&'a self) -> &'a Headers {
+        &self.headers
     }
 
     fn parse_status_line(
