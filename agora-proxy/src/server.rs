@@ -118,79 +118,71 @@ impl Server {
         }
 
         // could be a performance issue iterating through lots of mappings
-        let mut proxied_request = false;
-        for (prefix, entry) in config.reverse_proxy_mapping {
-            if request.path.starts_with(&prefix) {
-                debug!("Proxying request to {}", entry.addr);
-                proxied_request = true;
+        // this could be cachable.
+        let matching_entry = config
+            .reverse_proxy_mapping
+            .into_iter()
+            .find(|(prefix, _)| request.path.starts_with(prefix));
 
-                let Ok(mut server_stream) = TcpStream::connect(&entry.addr).await else {
-                    error!(
-                        "Failed to establish TCP connection with server: {}",
-                        entry.addr
-                    );
-                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
-                    return;
-                };
+        if let Some((prefix, entry)) = matching_entry {
+            let Ok(mut server_stream) = TcpStream::connect(&entry.addr).await else {
+                error!(
+                    "Failed to establish TCP connection with server: {}",
+                    entry.addr
+                );
+                close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
+                return;
+            };
 
-                let mut proxy_conn = ProxyConnection::new(&mut client_stream, &mut server_stream);
+            let mut proxy_conn = ProxyConnection::new(&mut client_stream, &mut server_stream);
 
-                if entry.strip_prefix {
-                    request.path = request.path.replace(&prefix, "").to_string();
-                    if !request.path.starts_with('/') {
-                        request.path.insert(0, '/');
-                    }
+            if entry.strip_prefix {
+                request.path = request.path.replace(&prefix, "").to_string();
+                if !request.path.starts_with('/') {
+                    request.path.insert(0, '/');
                 }
-
-                let Ok(proxy_result) = timeout(
-                    Duration::from_secs(30),
-                    proxy_conn.proxy_request(request, remaining_body),
-                )
-                .await
-                else {
-                    close_connection_with_reason(&mut client_stream, StatusCode::REQUEST_TIMEOUT)
-                        .await;
-                    return;
-                };
-
-                if let Err(ref e) = proxy_result {
-                    let reason = match e.kind() {
-                        io::ErrorKind::InvalidData => {
-                            warn!("Invalid Request: {e}");
-                            StatusCode::BAD_REQUEST
-                        }
-                        _ => {
-                            error!("Failed to proxy request to {}: {e}", entry.addr);
-                            StatusCode::BAD_GATEWAY
-                        }
-                    };
-
-                    close_connection_with_reason(&mut client_stream, reason).await;
-                    return;
-                };
-
-                let Ok(proxy_result) =
-                    timeout(Duration::from_secs(30), proxy_conn.proxy_response(&mut buf)).await
-                else {
-                    close_connection_with_reason(&mut client_stream, StatusCode::GATEWAY_TIMEOUT)
-                        .await;
-                    return;
-                };
-                if let Err(e) = proxy_result {
-                    error!("Failed to proxy response to {addr}: {e}");
-                    close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
-                    return;
-                };
-
-                // Notice that if multiple mappings match the same path,
-                // the first one in the array will be chosen.
-                break;
             }
-        }
 
-        if !proxied_request {
+            let Ok(proxy_result) = timeout(
+                Duration::from_secs(30),
+                proxy_conn.proxy_request(request, remaining_body),
+            )
+            .await
+            else {
+                close_connection_with_reason(&mut client_stream, StatusCode::REQUEST_TIMEOUT).await;
+                return;
+            };
+
+            if let Err(ref e) = proxy_result {
+                let reason = match e.kind() {
+                    io::ErrorKind::InvalidData => {
+                        warn!("Invalid Request: {e}");
+                        StatusCode::BAD_REQUEST
+                    }
+                    _ => {
+                        error!("Failed to proxy request to {}: {e}", entry.addr);
+                        StatusCode::BAD_GATEWAY
+                    }
+                };
+
+                close_connection_with_reason(&mut client_stream, reason).await;
+                return;
+            };
+
+            let Ok(proxy_result) =
+                timeout(Duration::from_secs(30), proxy_conn.proxy_response(&mut buf)).await
+            else {
+                close_connection_with_reason(&mut client_stream, StatusCode::GATEWAY_TIMEOUT).await;
+                return;
+            };
+
+            if let Err(e) = proxy_result {
+                error!("Failed to proxy response to {addr}: {e}");
+                close_connection_with_reason(&mut client_stream, StatusCode::BAD_GATEWAY).await;
+            };
+        } else {
             close_connection_with_reason(&mut client_stream, StatusCode::NOT_FOUND).await;
-        }
+        };
     }
 }
 
@@ -311,18 +303,19 @@ impl<'conn> ProxyConnection<'conn> {
 
         let mut buf = [0; 4096];
         if let Some(transfer_encoding) = transfer_encoding
-            && let is_chunked = transfer_encoding
+            && transfer_encoding
                 .to_lowercase()
                 .split(",")
                 .any(|value| value.trim() == "chunked")
-            && is_chunked
             && !is_terminated(remaining_bytes)
         {
             let mut bytes_read = 0;
 
             // we will keep the last 3 bytes of the *last* buffer in the beginning 3 bytes of the
             // *current* buffer. The reason for this is to handle the case where the message terminator
-            // was split over two messages. For example imagine [H, E, L, L, O, \r, \n, \r] [\n].
+            // was split over two messages. For example imagine:
+            // first request: [H, E, L, L, O, \r, \n, \r]
+            // second request: [\r, \n, \r, \n <- new]
             //
             // Since our terminator is 4 bytes, we only need to keep the last 3 bytes to determine
             // if the terminator carried over from the last buffer. Since we keep the last 3 bytes
